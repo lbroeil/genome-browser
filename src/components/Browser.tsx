@@ -18,11 +18,13 @@ export function Browser() {
 
   // Add built-in hg38 sequence + translation track on first mount
   useEffect(() => {
-    const existing = useTrackStore.getState().tracks
-    if (existing.some((t) => t.id === 'hg38-sequence')) return
+    if (useTrackStore.getState().tracks.some((t) => t.id === 'hg38-sequence')) return
 
     const adapter = new UcscSequenceAdapter()
     adapter.initialize().then(() => {
+      // Re-check after async init — React StrictMode runs effects twice,
+      // so both can pass the sync check before either finishes
+      if (useTrackStore.getState().tracks.some((t) => t.id === 'hg38-sequence')) return
       addTrack({
         id: 'hg38-sequence',
         name: 'hg38 Sequence / Translation',

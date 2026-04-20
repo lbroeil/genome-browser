@@ -310,6 +310,7 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
             >
               <option value="collapsed">Collapsed</option>
               <option value="expanded">Expanded</option>
+              <option value="frame">Frame (ORF)</option>
             </select>
             <div className="flex items-center gap-0.5" title="Strand colors (+ / -)">
               <input

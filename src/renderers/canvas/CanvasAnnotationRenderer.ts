@@ -1,6 +1,6 @@
 import type { GenomicFeature, GenomicRegion } from '@/adapters/types'
 import { bpToPixel } from '@/utils/coordinates'
-import { STRAND_COLORS } from '@/utils/colors'
+import { STRAND_COLORS, FRAME_COLORS } from '@/utils/colors'
 
 const ROW_HEIGHT = 26
 const ROW_GAP = 2
@@ -60,7 +60,7 @@ function expandTranscripts(features: GenomicFeature[]): GenomicFeature[] {
   return result
 }
 
-export type AnnotationDisplayMode = 'collapsed' | 'expanded'
+export type AnnotationDisplayMode = 'collapsed' | 'expanded' | 'frame'
 
 export function renderAnnotationCanvas(
   ctx: CanvasRenderingContext2D,
@@ -76,6 +76,7 @@ export function renderAnnotationCanvas(
   if (features.length === 0) return
 
   const sc = strandColors ?? STRAND_COLORS
+  const useFrameColor = displayMode === 'frame'
   const renderFeatures = displayMode === 'expanded' ? expandTranscripts(features) : features
   const layout = layoutFeatures(renderFeatures, region, width)
 
@@ -86,7 +87,9 @@ export function renderAnnotationCanvas(
 
     // Determine color
     let color = defaultColor
-    if (feature.data.type === 'annotation' && feature.data.itemRgb) {
+    if (useFrameColor) {
+      color = FRAME_COLORS[feature.start % 3]
+    } else if (feature.data.type === 'annotation' && feature.data.itemRgb) {
       color = feature.data.itemRgb
     } else if (feature.strand) {
       color = feature.strand === '+' ? sc.forward : sc.reverse
