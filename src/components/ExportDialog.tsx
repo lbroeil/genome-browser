@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useGenomeStore } from '@/store/genomeStore'
 import { useTrackStore } from '@/store/trackStore'
+import { useTranscriptViewStore } from '@/store/transcriptViewStore'
 import { renderCoverageSvg, type SvgCoverageDisplayMode } from '@/renderers/svg/SvgCoverageRenderer'
 import { renderAnnotationSvg, type SvgAnnotationDisplayMode } from '@/renderers/svg/SvgAnnotationRenderer'
 import { renderAlignmentSvg } from '@/renderers/svg/SvgAlignmentRenderer'
@@ -9,12 +10,18 @@ import { renderSequenceSvg } from '@/renderers/svg/SvgSequenceRenderer'
 import type { TranslationStrand } from '@/renderers/canvas/CanvasSequenceRenderer'
 import { composeSvg, svgToString, downloadSvg, downloadPng } from '@/export/SvgComposer'
 import { mapChromosomeName } from '@/utils/coordinates'
+import { fetchTranscriptCoverage } from '@/utils/transcriptData'
 
 type ExportFormat = 'svg' | 'png'
 
 export function ExportDialog({ onClose }: { onClose: () => void }) {
   const { chromosome, start, end } = useGenomeStore()
   const tracks = useTrackStore((s) => s.tracks)
+  const txActive = useTranscriptViewStore((s) => s.active)
+  const txMapper = useTranscriptViewStore((s) => s.mapper)
+  const txStart = useTranscriptViewStore((s) => s.txStart)
+  const txEnd = useTranscriptViewStore((s) => s.txEnd)
+  const txFeatureName = useTranscriptViewStore((s) => s.featureName)
   const [format, setFormat] = useState<ExportFormat>('svg')
   const [width, setWidth] = useState(800)
   const [labelWidth, setLabelWidth] = useState(120)
@@ -22,6 +29,9 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const [exporting, setExporting] = useState(false)
 
   const region = { chromosome, start, end }
+  const effectiveRegion = txActive && txMapper
+    ? { chromosome: 'tx', start: txStart, end: txEnd }
+    : region
 
   const handleExport = async () => {
     setExporting(true)
@@ -32,7 +42,20 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       for (const track of tracks) {
         if (!track.visible) continue
 
-        // Map chromosome name for this adapter
+        if (txActive && txMapper) {
+          // --- Transcript view export ---
+          if (track.type === 'coverage' && track.adapter.getCoverage) {
+            const txSpan = txEnd - txStart
+            const numBins = txSpan <= 5000 ? txSpan : dataWidth
+            const bins = await fetchTranscriptCoverage(track.adapter, txMapper, txStart, txEnd, numBins)
+            const element = renderCoverageSvg(bins, effectiveRegion, dataWidth, track.height, track.color, track.name, 'frame')
+            trackElements.push({ element, height: track.height, name: track.name })
+          }
+          // Skip non-coverage tracks in transcript view export for now
+          continue
+        }
+
+        // --- Normal genomic export ---
         const refNames = await track.adapter.getRefNames()
         const mappedChr = mapChromosomeName(region.chromosome, refNames)
         if (!mappedChr) continue
@@ -76,11 +99,13 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       const svg = composeSvg({
         width,
         trackElements,
-        region,
+        region: effectiveRegion,
         labelWidth,
       })
 
-      const regionStr = `${chromosome}_${start}-${end}`
+      const regionStr = txActive && txFeatureName
+        ? `transcript_${txFeatureName.replace(/[^a-zA-Z0-9]/g, '_')}_${txStart}-${txEnd}`
+        : `${chromosome}_${start}-${end}`
 
       if (format === 'svg') {
         const svgString = svgToString(svg)

@@ -1,10 +1,19 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from 'react'
 import { useGenomeStore } from '@/store/genomeStore'
+import { useTranscriptViewStore } from '@/store/transcriptViewStore'
 import { useSearchStore, type SearchableFeature } from '@/store/searchStore'
 import { CHROMOSOME_LIST, formatRegion, parseRegion, regionWidth, formatBp } from '@/utils/coordinates'
 
 export function NavigationBar() {
   const { chromosome, start, end, setRegion, setChromosome, zoom } = useGenomeStore()
+  const txActive = useTranscriptViewStore((s) => s.active)
+  const txFeatureName = useTranscriptViewStore((s) => s.featureName)
+  const txMapper = useTranscriptViewStore((s) => s.mapper)
+  const txStart = useTranscriptViewStore((s) => s.txStart)
+  const txEnd = useTranscriptViewStore((s) => s.txEnd)
+  const txExit = useTranscriptViewStore((s) => s.exit)
+  const txZoom = useTranscriptViewStore((s) => s.zoomTx)
+  const txSetRegion = useTranscriptViewStore((s) => s.setTxRegion)
   const { search, getRegionForFeature } = useSearchStore()
   const region = { chromosome, start, end }
   const [inputValue, setInputValue] = useState('')
@@ -13,7 +22,30 @@ export function NavigationBar() {
   const [selectedIdx, setSelectedIdx] = useState(-1)
   const suggestionsRef = useRef<HTMLDivElement>(null)
 
+  // Escape key exits transcript view
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape' && useTranscriptViewStore.getState().active) {
+        useTranscriptViewStore.getState().exit()
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [])
+
   const handleGo = () => {
+    if (txActive) {
+      // In transcript view, parse "100-500" or "tx:100-500" as transcript coords
+      const cleaned = inputValue.replace(/^tx:/, '').trim()
+      const match = cleaned.match(/^(\d+)\s*[-–]\s*(\d+)$/)
+      if (match) {
+        txSetRegion(parseInt(match[1], 10), parseInt(match[2], 10))
+        setInputValue('')
+        return
+      }
+      return
+    }
+
     // Try as region first
     const parsed = parseRegion(inputValue)
     if (parsed) {
@@ -37,6 +69,8 @@ export function NavigationBar() {
   const handleInputChange = (value: string) => {
     setInputValue(value)
     setSelectedIdx(-1)
+
+    if (txActive) return // No gene search in transcript view
 
     // Only search if it doesn't look like a coordinate
     if (value.trim().length >= 2 && !value.includes(':')) {
@@ -89,23 +123,56 @@ export function NavigationBar() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const displayValue = inputFocused ? inputValue : formatRegion(region)
-  const spanWidth = regionWidth(region)
+  const txSpan = txEnd - txStart
+  const displayValue = txActive
+    ? (inputFocused ? inputValue : `tx:${txStart}-${txEnd}`)
+    : (inputFocused ? inputValue : formatRegion(region))
+  const spanWidth = txActive ? txSpan : regionWidth(region)
+
+  const handleZoomIn = () => txActive ? txZoom(0.5) : zoom(0.5)
+  const handleZoomOut = () => txActive ? txZoom(2) : zoom(2)
+  const handleZoomIn10x = () => txActive ? txZoom(0.1) : zoom(0.1)
+  const handleZoomOut10x = () => txActive ? txZoom(10) : zoom(10)
 
   return (
     <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-card">
-      {/* Chromosome selector */}
-      <select
-        value={chromosome}
-        onChange={(e) => setChromosome(e.target.value)}
-        className="h-8 px-2 rounded border border-input bg-background text-sm cursor-pointer"
-      >
-        {CHROMOSOME_LIST.map((chr) => (
-          <option key={chr} value={chr}>
-            {chr}
-          </option>
-        ))}
-      </select>
+      {txActive ? (
+        <>
+          {/* Transcript view indicator */}
+          <div className="flex items-center gap-2">
+            <span className="h-8 px-2 flex items-center rounded bg-violet-100 dark:bg-violet-900 text-violet-700 dark:text-violet-300 text-sm font-medium">
+              {txFeatureName ?? 'Transcript'}
+              {txMapper && (
+                <span className="ml-1 text-xs opacity-75">
+                  ({txMapper.strand === '+' ? '+' : '\u2212'} strand, {txMapper.txLength}bp)
+                </span>
+              )}
+            </span>
+            <button
+              onClick={txExit}
+              className="h-8 px-3 rounded bg-destructive text-destructive-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+              title="Exit transcript view (Esc)"
+            >
+              Exit Transcript View
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Chromosome selector */}
+          <select
+            value={chromosome}
+            onChange={(e) => setChromosome(e.target.value)}
+            className="h-8 px-2 rounded border border-input bg-background text-sm cursor-pointer"
+          >
+            {CHROMOSOME_LIST.map((chr) => (
+              <option key={chr} value={chr}>
+                {chr}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
 
       {/* Region / Gene search input */}
       <div className="relative flex items-center gap-1" ref={suggestionsRef}>
@@ -123,7 +190,7 @@ export function NavigationBar() {
             setTimeout(() => setSuggestions([]), 200)
           }}
           onKeyDown={handleKeyDown}
-          placeholder="chr1:1,000-2,000 or gene name"
+          placeholder={txActive ? 'tx:100-500' : 'chr1:1,000-2,000 or gene name'}
           className="h-8 px-2 w-72 rounded border border-input bg-background text-sm font-mono"
         />
         <button
@@ -157,28 +224,28 @@ export function NavigationBar() {
       {/* Zoom controls */}
       <div className="flex items-center gap-1 ml-2">
         <button
-          onClick={() => zoom(0.5)}
+          onClick={handleZoomIn}
           className="h-8 w-8 rounded border border-input bg-background text-sm font-bold hover:bg-accent transition-colors"
           title="Zoom in"
         >
           +
         </button>
         <button
-          onClick={() => zoom(2)}
+          onClick={handleZoomOut}
           className="h-8 w-8 rounded border border-input bg-background text-sm font-bold hover:bg-accent transition-colors"
           title="Zoom out"
         >
           −
         </button>
         <button
-          onClick={() => zoom(0.1)}
+          onClick={handleZoomIn10x}
           className="h-8 px-2 rounded border border-input bg-background text-xs hover:bg-accent transition-colors"
           title="Zoom in 10x"
         >
           10x
         </button>
         <button
-          onClick={() => zoom(10)}
+          onClick={handleZoomOut10x}
           className="h-8 px-2 rounded border border-input bg-background text-xs hover:bg-accent transition-colors"
           title="Zoom out 10x"
         >

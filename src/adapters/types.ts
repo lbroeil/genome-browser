@@ -8,6 +8,7 @@ export interface CoverageBin {
   start: number
   end: number
   value: number
+  frame?: 0 | 1 | 2
 }
 
 export interface AlignmentData {

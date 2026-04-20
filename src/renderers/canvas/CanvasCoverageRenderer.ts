@@ -28,7 +28,7 @@ export function renderCoverageCanvas(
       const xEnd = bpToPixel(bin.end, region, width)
       const barW = Math.max(1, xEnd - x)
       const barHeight = (bin.value / maxValue) * plotHeight
-      ctx.fillStyle = FRAME_COLORS[bin.start % 3]
+      ctx.fillStyle = FRAME_COLORS[bin.frame ?? (bin.start % 3)]
       ctx.fillRect(x, plotTop + plotHeight - barHeight, barW, barHeight)
     }
   } else if (displayMode === 'bar') {

@@ -4,11 +4,14 @@ import { useThemeColors } from '@/hooks/useThemeColors'
 import { mapChromosomeName } from '@/utils/coordinates'
 import { useTrackStore, type TrackConfig } from '@/store/trackStore'
 import { pixelToBp } from '@/utils/coordinates'
+import { useTranscriptViewStore } from '@/store/transcriptViewStore'
 import { renderCoverageCanvas, type CoverageDisplayMode } from '@/renderers/canvas/CanvasCoverageRenderer'
 import { renderAnnotationCanvas, type AnnotationDisplayMode } from '@/renderers/canvas/CanvasAnnotationRenderer'
 import { renderAlignmentCanvas } from '@/renderers/canvas/CanvasAlignmentRenderer'
 import { renderVariantCanvas } from '@/renderers/canvas/CanvasVariantRenderer'
 import { renderSequenceCanvas, getSequenceTrackHeight, type TranslationStrand } from '@/renderers/canvas/CanvasSequenceRenderer'
+import { fetchTranscriptCoverage } from '@/utils/transcriptData'
+import { TranscriptCoordinateMapper } from '@/utils/TranscriptCoordinateMapper'
 import type { GenomicFeature, CoverageBin } from '@/adapters/types'
 
 interface TrackViewProps {
@@ -35,8 +38,20 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
   const isSelecting = useRef(false)
   const selectionStartX = useRef(0)
   const [selection, setSelection] = useState<{ left: number; width: number } | null>(null)
+  const clickStartPos = useRef<{ x: number; y: number } | null>(null)
 
   const region = { chromosome, start, end }
+
+  // Transcript view state
+  const txActive = useTranscriptViewStore((s) => s.active)
+  const txMapper = useTranscriptViewStore((s) => s.mapper)
+  const txStart = useTranscriptViewStore((s) => s.txStart)
+  const txEnd = useTranscriptViewStore((s) => s.txEnd)
+
+  // The "effective region" used for rendering — genomic or transcript coordinates
+  const effectiveRegion = txActive && txMapper
+    ? { chromosome: 'tx', start: txStart, end: txEnd }
+    : region
 
   // Fetch data when viewport changes
   useEffect(() => {
@@ -46,60 +61,82 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
 
     const fetchData = async () => {
       try {
-        // Map chromosome name to adapter's format (handles chr1 vs 1 mismatch)
-        const refNames = await track.adapter.getRefNames()
-        const mappedChr = mapChromosomeName(region.chromosome, refNames)
-        if (!mappedChr) {
-          if (!cancelled) { setData(null); setCoverageData(null); setLoading(false) }
-          return
-        }
-        const queryRegion = { ...region, chromosome: mappedChr }
+        if (txActive && txMapper) {
+          // --- Transcript view mode ---
+          const container = containerRef.current
+          const pixelWidth = container ? Math.round(container.getBoundingClientRect().width) : 800
 
-        if (track.type === 'sequence' && track.adapter.getSequence) {
-          const viewportBp = queryRegion.end - queryRegion.start
-          if (viewportBp <= 600) {
-            const seq = await track.adapter.getSequence(queryRegion)
+          if (track.type === 'coverage' && track.adapter.getCoverage) {
+            const covMode = (track.settings.displayMode as string) ?? 'area'
+            // In transcript view, always use frame mode for coverage
+            const txSpan = txEnd - txStart
+            const bins = (covMode === 'frame') && txSpan <= 5000 ? txSpan : pixelWidth
+            const coverage = await fetchTranscriptCoverage(track.adapter, txMapper, txStart, txEnd, bins)
             if (!cancelled) {
-              setSequenceData(seq)
+              setCoverageData(coverage)
               setData(null)
-              setCoverageData(null)
+              setSequenceData(null)
             }
           } else {
-            if (!cancelled) {
-              setSequenceData('')
-              setData(null)
-              setCoverageData(null)
-            }
-          }
-        } else if (track.type === 'coverage' && track.adapter.getCoverage) {
-          const container = containerRef.current
-          const viewportBp = queryRegion.end - queryRegion.start
-          const covMode = (track.settings.displayMode as string) ?? 'area'
-          // For frame mode, request 1bp resolution when zoomed in close enough
-          const bins = covMode === 'frame' && viewportBp <= 5000
-            ? viewportBp
-            : container ? Math.round(container.getBoundingClientRect().width) : 800
-          const coverage = await track.adapter.getCoverage(queryRegion, bins)
-          if (!cancelled) {
-            setCoverageData(coverage)
-            setData(null)
-          }
-        } else if (track.type === 'alignment') {
-          const container = containerRef.current
-          const bins = container ? Math.round(container.getBoundingClientRect().width) : 800
-          const [features, coverage] = await Promise.all([
-            track.adapter.getFeatures(queryRegion),
-            track.adapter.getCoverage?.(queryRegion, bins) ?? Promise.resolve([]),
-          ])
-          if (!cancelled) {
-            setData(features)
-            setCoverageData(coverage)
+            // Non-coverage tracks: skip in transcript view for now
+            if (!cancelled) { setData(null); setCoverageData(null); setSequenceData(null); setLoading(false) }
+            return
           }
         } else {
-          const features = await track.adapter.getFeatures(queryRegion)
-          if (!cancelled) {
-            setData(features)
-            setCoverageData(null)
+          // --- Normal genomic mode ---
+          const refNames = await track.adapter.getRefNames()
+          const mappedChr = mapChromosomeName(region.chromosome, refNames)
+          if (!mappedChr) {
+            if (!cancelled) { setData(null); setCoverageData(null); setLoading(false) }
+            return
+          }
+          const queryRegion = { ...region, chromosome: mappedChr }
+
+          if (track.type === 'sequence' && track.adapter.getSequence) {
+            const viewportBp = queryRegion.end - queryRegion.start
+            if (viewportBp <= 600) {
+              const seq = await track.adapter.getSequence(queryRegion)
+              if (!cancelled) {
+                setSequenceData(seq)
+                setData(null)
+                setCoverageData(null)
+              }
+            } else {
+              if (!cancelled) {
+                setSequenceData('')
+                setData(null)
+                setCoverageData(null)
+              }
+            }
+          } else if (track.type === 'coverage' && track.adapter.getCoverage) {
+            const container = containerRef.current
+            const viewportBp = queryRegion.end - queryRegion.start
+            const covMode = (track.settings.displayMode as string) ?? 'area'
+            const bins = covMode === 'frame' && viewportBp <= 5000
+              ? viewportBp
+              : container ? Math.round(container.getBoundingClientRect().width) : 800
+            const coverage = await track.adapter.getCoverage(queryRegion, bins)
+            if (!cancelled) {
+              setCoverageData(coverage)
+              setData(null)
+            }
+          } else if (track.type === 'alignment') {
+            const container = containerRef.current
+            const bins = container ? Math.round(container.getBoundingClientRect().width) : 800
+            const [features, coverage] = await Promise.all([
+              track.adapter.getFeatures(queryRegion),
+              track.adapter.getCoverage?.(queryRegion, bins) ?? Promise.resolve([]),
+            ])
+            if (!cancelled) {
+              setData(features)
+              setCoverageData(coverage)
+            }
+          } else {
+            const features = await track.adapter.getFeatures(queryRegion)
+            if (!cancelled) {
+              setData(features)
+              setCoverageData(null)
+            }
           }
         }
       } catch (e) {
@@ -113,7 +150,7 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
 
     fetchData()
     return () => { cancelled = true }
-  }, [chromosome, start, end, track.adapter, track.type, track.settings])
+  }, [chromosome, start, end, track.adapter, track.type, track.settings, txActive, txMapper, txStart, txEnd])
 
   // Auto-resize sequence track based on zoom level and strand setting
   const seqStrand = (track.settings.translationStrand as TranslationStrand) ?? 'forward'
@@ -146,22 +183,22 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
 
     if (track.type === 'sequence' && sequenceData !== null) {
       const strand = (track.settings.translationStrand as TranslationStrand) ?? 'forward'
-      renderSequenceCanvas(ctx, sequenceData, region, width, track.height, strand)
+      renderSequenceCanvas(ctx, sequenceData, effectiveRegion, width, track.height, strand)
     } else if (track.type === 'coverage' && coverageData) {
-      renderCoverageCanvas(ctx, coverageData, region, width, track.height, track.color,
-        (track.settings.displayMode as CoverageDisplayMode) ?? 'area')
+      const covMode = txActive ? 'frame' as CoverageDisplayMode : (track.settings.displayMode as CoverageDisplayMode) ?? 'area'
+      renderCoverageCanvas(ctx, coverageData, effectiveRegion, width, track.height, track.color, covMode)
     } else if (track.type === 'alignment' && data) {
-      renderAlignmentCanvas(ctx, data, coverageData ?? [], region, width, track.height, track.color)
+      renderAlignmentCanvas(ctx, data, coverageData ?? [], effectiveRegion, width, track.height, track.color)
     } else if (track.type === 'variant' && data) {
-      renderVariantCanvas(ctx, data, region, width, track.height, track.color)
+      renderVariantCanvas(ctx, data, effectiveRegion, width, track.height, track.color)
     } else if ((track.type === 'annotation' || track.type === 'gene_model') && data) {
       const strandColors = track.settings.forwardColor && track.settings.reverseColor
         ? { forward: track.settings.forwardColor as string, reverse: track.settings.reverseColor as string }
         : undefined
-      renderAnnotationCanvas(ctx, data, region, width, track.height, track.color, colors.foreground,
+      renderAnnotationCanvas(ctx, data, effectiveRegion, width, track.height, track.color, colors.foreground,
         (track.settings.displayMode as AnnotationDisplayMode) ?? 'collapsed', strandColors)
     }
-  }, [data, coverageData, sequenceData, track.height, track.color, track.type, track.settings, chromosome, start, end, colors.foreground])
+  }, [data, coverageData, sequenceData, track.height, track.color, track.type, track.settings, effectiveRegion, colors.foreground, txActive])
 
   useEffect(() => {
     render()
@@ -185,16 +222,25 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
       e.preventDefault()
       const rect = el.getBoundingClientRect()
       const mouseX = e.clientX - rect.left
-      const s = useGenomeStore.getState()
-      const centerBp = pixelToBp(mouseX, { chromosome: s.chromosome, start: s.start, end: s.end }, rect.width)
-      if (e.deltaY < 0) s.zoom(0.7, centerBp)
-      else s.zoom(1.4, centerBp)
+      const txState = useTranscriptViewStore.getState()
+      if (txState.active) {
+        const txRegion = { chromosome: 'tx', start: txState.txStart, end: txState.txEnd }
+        const centerTx = pixelToBp(mouseX, txRegion, rect.width)
+        if (e.deltaY < 0) txState.zoomTx(0.7, centerTx)
+        else txState.zoomTx(1.4, centerTx)
+      } else {
+        const s = useGenomeStore.getState()
+        const centerBp = pixelToBp(mouseX, { chromosome: s.chromosome, start: s.start, end: s.end }, rect.width)
+        if (e.deltaY < 0) s.zoom(0.7, centerBp)
+        else s.zoom(1.4, centerBp)
+      }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    clickStartPos.current = { x: e.clientX, y: e.clientY }
     if (e.shiftKey) {
       isSelecting.current = true
       const rect = containerRef.current?.getBoundingClientRect()
@@ -222,26 +268,91 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
     const deltaPx = e.clientX - lastX.current
-    const deltaBp = -(deltaPx / rect.width) * (end - start)
-    pan(Math.round(deltaBp))
+    const txState = useTranscriptViewStore.getState()
+    if (txState.active) {
+      const deltaTx = -(deltaPx / rect.width) * (txState.txEnd - txState.txStart)
+      txState.panTx(Math.round(deltaTx))
+    } else {
+      const deltaBp = -(deltaPx / rect.width) * (end - start)
+      pan(Math.round(deltaBp))
+    }
     lastX.current = e.clientX
   }
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent) => {
     if (isSelecting.current) {
       isSelecting.current = false
       if (selection && selection.width > 5) {
         const rect = containerRef.current?.getBoundingClientRect()
         if (rect) {
-          const startBp = pixelToBp(selection.left, region, rect.width)
-          const endBp = pixelToBp(selection.left + selection.width, region, rect.width)
-          setRegion({ chromosome, start: Math.round(startBp), end: Math.round(endBp) })
+          const txState = useTranscriptViewStore.getState()
+          if (txState.active) {
+            const txRegion = { chromosome: 'tx', start: txState.txStart, end: txState.txEnd }
+            const s = pixelToBp(selection.left, txRegion, rect.width)
+            const en = pixelToBp(selection.left + selection.width, txRegion, rect.width)
+            txState.setTxRegion(Math.round(s), Math.round(en))
+          } else {
+            const startBp = pixelToBp(selection.left, region, rect.width)
+            const endBp = pixelToBp(selection.left + selection.width, region, rect.width)
+            setRegion({ chromosome, start: Math.round(startBp), end: Math.round(endBp) })
+          }
         }
       }
       setSelection(null)
+      clickStartPos.current = null
       return
     }
     isDragging.current = false
+
+    // Detect click (not drag) on annotation/gene_model tracks to enter transcript view
+    if (
+      clickStartPos.current &&
+      !txActive &&
+      (track.type === 'annotation' || track.type === 'gene_model') &&
+      data
+    ) {
+      const dx = Math.abs(e.clientX - clickStartPos.current.x)
+      const dy = Math.abs(e.clientY - clickStartPos.current.y)
+      if (dx < 4 && dy < 4) {
+        handleFeatureClick(e)
+      }
+    }
+    clickStartPos.current = null
+  }
+
+  const handleFeatureClick = (e: React.MouseEvent) => {
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect || !data) return
+    const clickBp = pixelToBp(e.clientX - rect.left, region, rect.width)
+
+    // Find the clicked feature
+    for (const feature of data) {
+      if (clickBp >= feature.start && clickBp < feature.end) {
+        let mapper: TranscriptCoordinateMapper | null = null
+        let label = ''
+
+        if (feature.data.type === 'gene_model' && feature.data.transcripts.length > 0) {
+          const transcript = feature.data.transcripts[0]
+          mapper = TranscriptCoordinateMapper.fromTranscript(transcript, feature.chromosome)
+          label = feature.data.geneName ?? feature.data.geneId
+          if (transcript.id) label += ` · ${transcript.id}`
+        } else if (
+          feature.data.type === 'annotation' &&
+          feature.data.blockStarts &&
+          feature.data.blockSizes &&
+          feature.data.blockCount &&
+          feature.data.blockCount > 1
+        ) {
+          mapper = TranscriptCoordinateMapper.fromBed12(feature)
+          label = feature.data.name ?? feature.id
+        }
+
+        if (mapper && mapper.txLength > 0) {
+          useTranscriptViewStore.getState().enter(mapper, feature.id, label)
+        }
+        break
+      }
+    }
   }
 
   if (!track.visible) return null
@@ -376,7 +487,7 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        onMouseLeave={() => { isDragging.current = false; isSelecting.current = false; setSelection(null); clickStartPos.current = null }}
       >
         <canvas ref={canvasRef} />
         {selection && selection.width > 0 && (

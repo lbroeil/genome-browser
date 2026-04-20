@@ -37,7 +37,7 @@ export function renderCoverageSvg(
       frameGroup.setAttribute('fill', FRAME_COLORS[f])
 
       for (const bin of bins) {
-        if (bin.value === 0 || bin.start % 3 !== f) continue
+        if (bin.value === 0 || (bin.frame ?? (bin.start % 3)) !== f) continue
         const x = bpToPixel(bin.start, region, width)
         const xEnd = bpToPixel(bin.end, region, width)
         const barW = Math.max(1, xEnd - x)
