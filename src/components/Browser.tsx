@@ -6,6 +6,7 @@ import { TrackPanel } from './TrackPanel'
 import { ExportDialog } from './ExportDialog'
 import { useTrackStore } from '@/store/trackStore'
 import { useGenomeStore } from '@/store/genomeStore'
+import { useCrosshairStore } from '@/store/crosshairStore'
 import { UcscSequenceAdapter } from '@/adapters/UcscSequenceAdapter'
 import { serializeSession, restoreSession, downloadSession } from '@/export/SessionManager'
 
@@ -14,6 +15,8 @@ export function Browser() {
   const [sessionWarnings, setSessionWarnings] = useState<string[]>([])
   const tracks = useTrackStore((s) => s.tracks)
   const addTrack = useTrackStore((s) => s.addTrack)
+  const crosshairEnabled = useCrosshairStore((s) => s.enabled)
+  const toggleCrosshair = useCrosshairStore((s) => s.toggle)
   const sessionInputRef = useRef<HTMLInputElement>(null)
 
   // Add built-in hg38 sequence + translation track on first mount
@@ -85,6 +88,17 @@ export function Browser() {
         <h1 className="text-sm font-semibold tracking-tight">genome-browser</h1>
         <div className="flex items-center gap-2">
           <button
+            onClick={toggleCrosshair}
+            className={`h-7 px-3 rounded text-xs font-medium transition-colors ${
+              crosshairEnabled
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-secondary text-secondary-foreground hover:bg-accent'
+            }`}
+            title="Toggle vertical crosshair line (helps align P-sites with codons)"
+          >
+            Crosshair
+          </button>
+          <button
             onClick={() => sessionInputRef.current?.click()}
             className="h-7 px-3 rounded bg-secondary text-secondary-foreground text-xs font-medium hover:bg-accent transition-colors"
           >
@@ -127,8 +141,17 @@ export function Browser() {
 
       <NavigationBar />
       <FileLoader />
-      <GenomeRuler />
-      <TrackPanel />
+      <div
+        className="flex flex-col flex-1 min-h-0"
+        onMouseMove={crosshairEnabled ? (e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          useCrosshairStore.getState().setX(e.clientX - rect.left)
+        } : undefined}
+        onMouseLeave={crosshairEnabled ? () => useCrosshairStore.getState().setX(null) : undefined}
+      >
+        <GenomeRuler />
+        <TrackPanel />
+      </div>
 
       {showExport && <ExportDialog onClose={() => setShowExport(false)} />}
     </div>

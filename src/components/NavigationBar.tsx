@@ -21,6 +21,7 @@ export function NavigationBar() {
   const [suggestions, setSuggestions] = useState<SearchableFeature[]>([])
   const [selectedIdx, setSelectedIdx] = useState(-1)
   const suggestionsRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   // Escape key exits transcript view
   useEffect(() => {
@@ -177,12 +178,19 @@ export function NavigationBar() {
       {/* Region / Gene search input */}
       <div className="relative flex items-center gap-1" ref={suggestionsRef}>
         <input
+          ref={inputRef}
           type="text"
           value={displayValue}
           onChange={(e) => handleInputChange(e.target.value)}
           onFocus={() => {
             setInputFocused(true)
-            setInputValue('')
+            // Pre-fill with current coordinates so user can copy/select them
+            const current = txActive
+              ? `tx:${txStart}-${txEnd}`
+              : formatRegion(region)
+            setInputValue(current)
+            // Select all text after React re-renders with the new value
+            requestAnimationFrame(() => inputRef.current?.select())
           }}
           onBlur={() => {
             setInputFocused(false)

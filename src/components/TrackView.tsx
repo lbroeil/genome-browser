@@ -12,6 +12,7 @@ import { renderVariantCanvas } from '@/renderers/canvas/CanvasVariantRenderer'
 import { renderSequenceCanvas, getSequenceTrackHeight, type TranslationStrand } from '@/renderers/canvas/CanvasSequenceRenderer'
 import { fetchTranscriptCoverage, remapFeaturesToTranscript } from '@/utils/transcriptData'
 import { TranscriptCoordinateMapper } from '@/utils/TranscriptCoordinateMapper'
+import { useCrosshairStore } from '@/store/crosshairStore'
 import type { GenomicFeature, CoverageBin } from '@/adapters/types'
 
 interface TrackViewProps {
@@ -524,7 +525,20 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
             <span className="text-xs text-destructive">{error}</span>
           </div>
         )}
+        <CrosshairLine />
       </div>
     </div>
+  )
+}
+
+function CrosshairLine() {
+  const enabled = useCrosshairStore((s) => s.enabled)
+  const x = useCrosshairStore((s) => s.x)
+  if (!enabled || x === null) return null
+  return (
+    <div
+      className="absolute top-0 bottom-0 w-px bg-red-500/70 pointer-events-none z-20"
+      style={{ left: x }}
+    />
   )
 }

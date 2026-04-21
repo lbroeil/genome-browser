@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from 'react'
 import { useGenomeStore } from '@/store/genomeStore'
 import { useTranscriptViewStore } from '@/store/transcriptViewStore'
+import { useCrosshairStore } from '@/store/crosshairStore'
 import { generateTicks, formatBp, bpToPixel, pixelToBp } from '@/utils/coordinates'
 import { useThemeColors } from '@/hooks/useThemeColors'
 import { FRAME_COLORS } from '@/utils/colors'
@@ -244,6 +245,9 @@ export function GenomeRuler() {
     isDragging.current = false
   }
 
+  const crosshairEnabled = useCrosshairStore((s) => s.enabled)
+  const crosshairX = useCrosshairStore((s) => s.x)
+
   return (
     <div
       ref={containerRef}
@@ -258,6 +262,12 @@ export function GenomeRuler() {
         <div
           className="absolute top-0 bottom-0 bg-primary/20 border-x-2 border-primary/60 pointer-events-none"
           style={{ left: selection.left, width: selection.width }}
+        />
+      )}
+      {crosshairEnabled && crosshairX !== null && (
+        <div
+          className="absolute top-0 bottom-0 w-px bg-red-500/70 pointer-events-none z-20"
+          style={{ left: crosshairX }}
         />
       )}
     </div>
