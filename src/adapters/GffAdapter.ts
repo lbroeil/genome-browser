@@ -109,12 +109,19 @@ export class GffAdapter implements GenomicAdapter {
   }
 
   private buildGeneModels(rawFeatures: RawFeature[]): GenomicFeature[] {
-    // Group by gene
+    if (this.format === 'gff3') {
+      return this.buildGeneModelsGff3(rawFeatures)
+    }
+    return this.buildGeneModelsGtf(rawFeatures)
+  }
+
+  /** GTF: group by gene_id / transcript_id attributes */
+  private buildGeneModelsGtf(rawFeatures: RawFeature[]): GenomicFeature[] {
     const geneMap = new Map<string, { gene: RawFeature | null; transcripts: Map<string, { transcript: RawFeature | null; exons: RawFeature[]; cds: RawFeature[]; utrs: RawFeature[] }> }>()
 
     for (const f of rawFeatures) {
-      const geneId = f.attributes.gene_id || f.attributes.ID || f.attributes.Parent || 'unknown'
-      const transcriptId = f.attributes.transcript_id || f.attributes.ID || ''
+      const geneId = f.attributes.gene_id || 'unknown'
+      const transcriptId = f.attributes.transcript_id || ''
 
       if (!geneMap.has(geneId)) {
         geneMap.set(geneId, { gene: null, transcripts: new Map() })
@@ -151,7 +158,104 @@ export class GffAdapter implements GenomicAdapter {
       }
     }
 
-    // Build GenomicFeature for each gene
+    return this.assembleGenes(geneMap)
+  }
+
+  /** GFF3: resolve Parent-based hierarchy (gene → mRNA → exon/CDS/UTR) */
+  private buildGeneModelsGff3(rawFeatures: RawFeature[]): GenomicFeature[] {
+    // Build ID → feature lookup and Parent → children mapping
+    const byId = new Map<string, RawFeature>()
+    const childrenOf = new Map<string, RawFeature[]>()
+
+    for (const f of rawFeatures) {
+      if (f.attributes.ID) {
+        byId.set(f.attributes.ID, f)
+      }
+      const parents = f.attributes.Parent?.split(',') ?? []
+      for (const p of parents) {
+        const trimmed = p.trim()
+        if (!trimmed) continue
+        if (!childrenOf.has(trimmed)) childrenOf.set(trimmed, [])
+        childrenOf.get(trimmed)!.push(f)
+      }
+    }
+
+    type GeneEntry = { gene: RawFeature | null; transcripts: Map<string, { transcript: RawFeature | null; exons: RawFeature[]; cds: RawFeature[]; utrs: RawFeature[] }> }
+    const geneMap = new Map<string, GeneEntry>()
+
+    // Find all gene-level features
+    for (const f of rawFeatures) {
+      const typeLower = f.type.toLowerCase()
+      if (typeLower === 'gene' || typeLower === 'pseudogene') {
+        const geneId = f.attributes.ID ?? f.attributes.Name ?? `gene-${f.start}`
+        if (!geneMap.has(geneId)) {
+          geneMap.set(geneId, { gene: f, transcripts: new Map() })
+        } else {
+          geneMap.get(geneId)!.gene = f
+        }
+
+        // Find child transcripts (mRNA, transcript, etc.)
+        const txChildren = childrenOf.get(geneId) ?? []
+        for (const tx of txChildren) {
+          const txType = tx.type.toLowerCase()
+          if (txType === 'mrna' || txType === 'transcript' || txType === 'ncrna' || txType === 'lnc_rna' || txType === 'mrna' || txType === 'rrna' || txType === 'trna') {
+            const txId = tx.attributes.ID ?? tx.attributes.Name ?? `tx-${tx.start}`
+            const gene = geneMap.get(geneId)!
+            if (!gene.transcripts.has(txId)) {
+              gene.transcripts.set(txId, { transcript: tx, exons: [], cds: [], utrs: [] })
+            }
+
+            // Find child exons/CDS/UTR of this transcript
+            const subChildren = childrenOf.get(txId) ?? []
+            const txData = gene.transcripts.get(txId)!
+            for (const sub of subChildren) {
+              const subType = sub.type.toLowerCase()
+              if (subType === 'exon') {
+                txData.exons.push(sub)
+              } else if (subType === 'cds') {
+                txData.cds.push(sub)
+              } else if (subType.includes('utr') || subType === 'five_prime_utr' || subType === 'three_prime_utr') {
+                txData.utrs.push(sub)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Handle orphan mRNAs (no gene parent) — create synthetic gene entries
+    for (const f of rawFeatures) {
+      const typeLower = f.type.toLowerCase()
+      if (typeLower === 'mrna' || typeLower === 'transcript') {
+        const txId = f.attributes.ID ?? `tx-${f.start}`
+        const parentId = f.attributes.Parent
+        // Skip if parent is a known gene
+        if (parentId && geneMap.has(parentId)) continue
+
+        const geneId = parentId ?? txId
+        if (!geneMap.has(geneId)) {
+          geneMap.set(geneId, { gene: null, transcripts: new Map() })
+        }
+        const gene = geneMap.get(geneId)!
+        if (!gene.transcripts.has(txId)) {
+          gene.transcripts.set(txId, { transcript: f, exons: [], cds: [], utrs: [] })
+          const subChildren = childrenOf.get(txId) ?? []
+          const txData = gene.transcripts.get(txId)!
+          for (const sub of subChildren) {
+            const subType = sub.type.toLowerCase()
+            if (subType === 'exon') txData.exons.push(sub)
+            else if (subType === 'cds') txData.cds.push(sub)
+            else if (subType.includes('utr')) txData.utrs.push(sub)
+          }
+        }
+      }
+    }
+
+    return this.assembleGenes(geneMap)
+  }
+
+  /** Shared: convert grouped gene data into GenomicFeature[] */
+  private assembleGenes(geneMap: Map<string, { gene: RawFeature | null; transcripts: Map<string, { transcript: RawFeature | null; exons: RawFeature[]; cds: RawFeature[]; utrs: RawFeature[] }> }>): GenomicFeature[] {
     const result: GenomicFeature[] = []
 
     for (const [geneId, geneData] of geneMap) {
@@ -199,14 +303,12 @@ export class GffAdapter implements GenomicAdapter {
 
           for (const exon of exons) {
             if (exon.end <= cdsStart) {
-              // Entire exon is UTR
               const target = strand === '-' ? utr3 : utr5
               target.push({ start: exon.start, end: exon.end })
             } else if (exon.start >= cdsEnd) {
               const target = strand === '-' ? utr5 : utr3
               target.push({ start: exon.start, end: exon.end })
             } else {
-              // Partial UTR
               if (exon.start < cdsStart) {
                 const target = strand === '-' ? utr3 : utr5
                 target.push({ start: exon.start, end: cdsStart })
@@ -241,7 +343,7 @@ export class GffAdapter implements GenomicAdapter {
       if (!geneChrom || geneStart === Infinity) continue
 
       const geneName = geneData.gene?.attributes.gene_name ?? geneData.gene?.attributes.Name ?? undefined
-      const biotype = geneData.gene?.attributes.gene_biotype ?? geneData.gene?.attributes.gene_type ?? undefined
+      const biotype = geneData.gene?.attributes.gene_biotype ?? geneData.gene?.attributes.gene_type ?? geneData.gene?.attributes.biotype ?? undefined
 
       const data: GeneModelData = {
         type: 'gene_model',

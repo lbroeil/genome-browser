@@ -39,11 +39,13 @@ export function renderSequenceCanvas(
   let yOffset = 2
 
   // --- Nucleotide sequence ---
+  // When only reverse strand is selected, show reverse complement bases
+  const displaySeq = strand === 'reverse' ? reverseComplement(sequence) : sequence
   if (showLetters) {
-    for (let i = 0; i < sequence.length; i++) {
+    for (let i = 0; i < displaySeq.length; i++) {
       const genomicPos = region.start + i
       const x = bpToPixel(genomicPos, region, width)
-      const base = sequence[i]
+      const base = strand === 'reverse' ? displaySeq[displaySeq.length - 1 - i] : displaySeq[i]
       const color = NUCLEOTIDE_COLORS[base] ?? NUCLEOTIDE_COLORS.N
 
       ctx.fillStyle = color

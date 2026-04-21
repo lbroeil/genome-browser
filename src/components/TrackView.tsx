@@ -10,7 +10,7 @@ import { renderAnnotationCanvas, type AnnotationDisplayMode } from '@/renderers/
 import { renderAlignmentCanvas } from '@/renderers/canvas/CanvasAlignmentRenderer'
 import { renderVariantCanvas } from '@/renderers/canvas/CanvasVariantRenderer'
 import { renderSequenceCanvas, getSequenceTrackHeight, type TranslationStrand } from '@/renderers/canvas/CanvasSequenceRenderer'
-import { fetchTranscriptCoverage } from '@/utils/transcriptData'
+import { fetchTranscriptCoverage, remapFeaturesToTranscript } from '@/utils/transcriptData'
 import { TranscriptCoordinateMapper } from '@/utils/TranscriptCoordinateMapper'
 import type { GenomicFeature, CoverageBin } from '@/adapters/types'
 
@@ -67,18 +67,36 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
           const pixelWidth = container ? Math.round(container.getBoundingClientRect().width) : 800
 
           if (track.type === 'coverage' && track.adapter.getCoverage) {
-            const covMode = (track.settings.displayMode as string) ?? 'area'
-            // In transcript view, always use frame mode for coverage
             const txSpan = txEnd - txStart
-            const bins = (covMode === 'frame') && txSpan <= 5000 ? txSpan : pixelWidth
+            const bins = txSpan <= 5000 ? txSpan : pixelWidth
             const coverage = await fetchTranscriptCoverage(track.adapter, txMapper, txStart, txEnd, bins)
             if (!cancelled) {
               setCoverageData(coverage)
               setData(null)
               setSequenceData(null)
             }
+          } else if (track.type === 'annotation' || track.type === 'gene_model') {
+            // Fetch genomic features covering the transcript's exonic regions, then remap
+            const genomicRegions = txMapper.getGenomicRegionsForTranscriptRange(txStart, txEnd)
+            const allFeatures: GenomicFeature[] = []
+            const refNames = await track.adapter.getRefNames()
+            for (const gRegion of genomicRegions) {
+              const mappedChr = mapChromosomeName(gRegion.chromosome, refNames)
+              if (!mappedChr) continue
+              const features = await track.adapter.getFeatures({ ...gRegion, chromosome: mappedChr })
+              allFeatures.push(...features)
+            }
+            // Deduplicate by feature id
+            const seen = new Set<string>()
+            const unique = allFeatures.filter((f) => { if (seen.has(f.id)) return false; seen.add(f.id); return true })
+            const remapped = remapFeaturesToTranscript(unique, txMapper)
+            if (!cancelled) {
+              setData(remapped)
+              setCoverageData(null)
+              setSequenceData(null)
+            }
           } else {
-            // Non-coverage tracks: skip in transcript view for now
+            // Other track types (sequence, variant, alignment) — hide in transcript view
             if (!cancelled) { setData(null); setCoverageData(null); setSequenceData(null); setLoading(false) }
             return
           }
