@@ -1,5 +1,6 @@
 import { BamFile } from '@gmod/bam'
 import { RemoteFile, BlobFile } from 'generic-filehandle2'
+import { TauriFile } from './TauriFile'
 import type {
   GenomicAdapter,
   AdapterMetadata,
@@ -77,14 +78,22 @@ function parseCigarMismatches(
 export class BamAdapter implements GenomicAdapter {
   private bam: InstanceType<typeof BamFile> | null = null
   private refNames: string[] = []
-  private source: { file: File; index: File } | { bamUrl: string; baiUrl: string }
+  private source:
+    | { file: File; index: File }
+    | { bamUrl: string; baiUrl: string }
+    | { bamPath: string; baiPath: string }
 
-  constructor(source: { file: File; index: File } | { bamUrl: string; baiUrl: string }) {
+  constructor(source: { file: File; index: File } | { bamUrl: string; baiUrl: string } | { bamPath: string; baiPath: string }) {
     this.source = source
   }
 
   async initialize(): Promise<AdapterMetadata> {
-    if ('file' in this.source) {
+    if ('bamPath' in this.source) {
+      this.bam = new BamFile({
+        bamFilehandle: new TauriFile(this.source.bamPath),
+        baiFilehandle: new TauriFile(this.source.baiPath),
+      })
+    } else if ('file' in this.source) {
       this.bam = new BamFile({
         bamFilehandle: new BlobFile(this.source.file),
         baiFilehandle: new BlobFile(this.source.index),

@@ -1,5 +1,6 @@
 import { BigWig } from '@gmod/bbi'
 import { RemoteFile, BlobFile } from 'generic-filehandle2'
+import { TauriFile, isFilePath } from './TauriFile'
 import type { GenomicAdapter, AdapterMetadata, GenomicRegion, GenomicFeature, CoverageBin } from './types'
 
 export class BigWigAdapter implements GenomicAdapter {
@@ -9,7 +10,9 @@ export class BigWigAdapter implements GenomicAdapter {
   constructor(private source: File | string) {}
 
   async initialize(): Promise<AdapterMetadata> {
-    if (typeof this.source === 'string') {
+    if (typeof this.source === 'string' && isFilePath(this.source)) {
+      this.bigwig = new BigWig({ filehandle: new TauriFile(this.source) })
+    } else if (typeof this.source === 'string') {
       this.bigwig = new BigWig({ filehandle: new RemoteFile(this.source) })
     } else {
       this.bigwig = new BigWig({ filehandle: new BlobFile(this.source) })

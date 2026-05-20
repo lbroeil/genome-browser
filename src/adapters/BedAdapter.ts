@@ -1,3 +1,4 @@
+import { TauriFile, isFilePath } from './TauriFile'
 import type { GenomicAdapter, AdapterMetadata, GenomicRegion, GenomicFeature, AnnotationData } from './types'
 
 export class BedAdapter implements GenomicAdapter {
@@ -5,9 +6,12 @@ export class BedAdapter implements GenomicAdapter {
   private refNames: Set<string> = new Set()
   private fileHandle: File | null = null
   private url: string | null = null
+  private filePath: string | null = null
 
   constructor(source: File | string) {
-    if (typeof source === 'string') {
+    if (typeof source === 'string' && isFilePath(source)) {
+      this.filePath = source
+    } else if (typeof source === 'string') {
       this.url = source
     } else {
       this.fileHandle = source
@@ -17,7 +21,11 @@ export class BedAdapter implements GenomicAdapter {
   async initialize(): Promise<AdapterMetadata> {
     let text: string
 
-    if (this.fileHandle) {
+    if (this.filePath) {
+      const handle = new TauriFile(this.filePath)
+      const bytes = await handle.readFile()
+      text = new TextDecoder().decode(bytes)
+    } else if (this.fileHandle) {
       text = await this.fileHandle.text()
     } else if (this.url) {
       const response = await fetch(this.url)

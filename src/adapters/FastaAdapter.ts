@@ -1,4 +1,5 @@
 import { RemoteFile, BlobFile } from 'generic-filehandle2'
+import { TauriFile } from './TauriFile'
 import type { GenomicAdapter, AdapterMetadata, GenomicRegion, GenomicFeature } from './types'
 
 interface FaiEntry {
@@ -10,7 +11,7 @@ interface FaiEntry {
 }
 
 export class FastaAdapter implements GenomicAdapter {
-  private faHandle: InstanceType<typeof RemoteFile> | InstanceType<typeof BlobFile> | null = null
+  private faHandle: InstanceType<typeof RemoteFile> | InstanceType<typeof BlobFile> | TauriFile | null = null
   private index: FaiEntry[] = []
   private indexMap: Map<string, FaiEntry> = new Map()
   private refNames: string[] = []
@@ -18,13 +19,19 @@ export class FastaAdapter implements GenomicAdapter {
   constructor(
     private source:
       | { file: File; index: File }
-      | { faUrl: string; faiUrl: string },
+      | { faUrl: string; faiUrl: string }
+      | { faPath: string; faiPath: string },
   ) {}
 
   async initialize(): Promise<AdapterMetadata> {
     // Read the FAI index
     let faiText: string
-    if ('file' in this.source) {
+    if ('faPath' in this.source) {
+      this.faHandle = new TauriFile(this.source.faPath)
+      const faiHandle = new TauriFile(this.source.faiPath)
+      const faiBuffer = await faiHandle.readFile()
+      faiText = new TextDecoder().decode(faiBuffer)
+    } else if ('file' in this.source) {
       this.faHandle = new BlobFile(this.source.file)
       faiText = await this.source.index.text()
     } else {

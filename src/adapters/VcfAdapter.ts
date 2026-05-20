@@ -1,6 +1,7 @@
 import { TabixIndexedFile } from '@gmod/tabix'
 import VCFParser from '@gmod/vcf'
 import { RemoteFile, BlobFile } from 'generic-filehandle2'
+import { TauriFile } from './TauriFile'
 import type {
   GenomicAdapter,
   AdapterMetadata,
@@ -25,13 +26,19 @@ export class VcfAdapter implements GenomicAdapter {
   private source:
     | { vcfFile: File; tbiFile: File }
     | { vcfUrl: string; tbiUrl: string }
+    | { vcfPath: string; tbiPath: string }
 
-  constructor(source: { vcfFile: File; tbiFile: File } | { vcfUrl: string; tbiUrl: string }) {
+  constructor(source: { vcfFile: File; tbiFile: File } | { vcfUrl: string; tbiUrl: string } | { vcfPath: string; tbiPath: string }) {
     this.source = source
   }
 
   async initialize(): Promise<AdapterMetadata> {
-    if ('vcfFile' in this.source) {
+    if ('vcfPath' in this.source) {
+      this.tabix = new TabixIndexedFile({
+        filehandle: new TauriFile(this.source.vcfPath),
+        tbiFilehandle: new TauriFile(this.source.tbiPath),
+      })
+    } else if ('vcfFile' in this.source) {
       this.tabix = new TabixIndexedFile({
         filehandle: new BlobFile(this.source.vcfFile),
         tbiFilehandle: new BlobFile(this.source.tbiFile),
