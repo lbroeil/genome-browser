@@ -5,7 +5,7 @@ import { useSearchStore, type SearchableFeature } from '@/store/searchStore'
 import { CHROMOSOME_LIST, formatRegion, parseRegion, regionWidth, formatBp } from '@/utils/coordinates'
 
 export function NavigationBar() {
-  const { chromosome, start, end, setRegion, setChromosome, zoom } = useGenomeStore()
+  const { chromosome, start, end, setRegion, setChromosome, zoom, back, forward, canGoBack, canGoForward } = useGenomeStore()
   const txActive = useTranscriptViewStore((s) => s.active)
   const txFeatureName = useTranscriptViewStore((s) => s.featureName)
   const txMapper = useTranscriptViewStore((s) => s.mapper)
@@ -228,6 +228,28 @@ export function NavigationBar() {
           </div>
         )}
       </div>
+
+      {/* Back / Forward */}
+      {!txActive && (
+        <div className="flex items-center gap-1 ml-2">
+          <button
+            onClick={back}
+            disabled={!canGoBack}
+            className="h-8 w-8 rounded border border-input bg-background text-sm hover:bg-accent transition-colors disabled:opacity-30 disabled:cursor-default"
+            title="Back"
+          >
+            &#x2190;
+          </button>
+          <button
+            onClick={forward}
+            disabled={!canGoForward}
+            className="h-8 w-8 rounded border border-input bg-background text-sm hover:bg-accent transition-colors disabled:opacity-30 disabled:cursor-default"
+            title="Forward"
+          >
+            &#x2192;
+          </button>
+        </div>
+      )}
 
       {/* Zoom controls */}
       <div className="flex items-center gap-1 ml-2">

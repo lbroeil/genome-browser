@@ -5,9 +5,17 @@ import { GffAdapter } from '@/adapters/GffAdapter'
 import { BamAdapter } from '@/adapters/BamAdapter'
 import { VcfAdapter } from '@/adapters/VcfAdapter'
 import { FastaAdapter } from '@/adapters/FastaAdapter'
+import { UcscSequenceAdapter } from '@/adapters/UcscSequenceAdapter'
 import { isTauri } from '@/adapters/TauriFile'
 import type { TrackConfig, TrackType } from '@/store/trackStore'
 import type { GenomicAdapter } from '@/adapters/types'
+
+const USER_SETTING_KEYS = [
+  'displayMode',
+  'forwardColor',
+  'reverseColor',
+  'translationStrand',
+]
 
 interface SessionTrack {
   name: string
@@ -16,10 +24,11 @@ interface SessionTrack {
   color: string
   visible: boolean
   source: Record<string, string>
+  displaySettings?: Record<string, unknown>
 }
 
 interface SessionData {
-  version: 1
+  version: 2
   viewport: {
     chromosome: string
     start: number
@@ -32,19 +41,41 @@ export function serializeSession(
   tracks: TrackConfig[],
   viewport: { chromosome: string; start: number; end: number },
 ): string {
-  const sessionTracks: SessionTrack[] = tracks
-    .filter((t) => t.settings.source)
-    .map((t) => ({
+  const sessionTracks: SessionTrack[] = tracks.map((t) => {
+    let source: Record<string, string>
+    if (t.id === 'hg38-sequence') {
+      source = { format: 'builtin', builtinId: 'hg38-sequence' }
+    } else if (t.settings.source) {
+      source = t.settings.source as Record<string, string>
+    } else if (t.settings.sourceUrl) {
+      source = {
+        format: (t.settings.sourceFormat as string) ?? '',
+        url: t.settings.sourceUrl as string,
+      }
+    } else {
+      source = { format: 'unknown', name: t.name }
+    }
+
+    const displaySettings: Record<string, unknown> = {}
+    for (const key of USER_SETTING_KEYS) {
+      if (t.settings[key] !== undefined) {
+        displaySettings[key] = t.settings[key]
+      }
+    }
+
+    return {
       name: t.name,
       type: t.type,
       height: t.height,
       color: t.color,
       visible: t.visible,
-      source: t.settings.source as Record<string, string>,
-    }))
+      source,
+      displaySettings: Object.keys(displaySettings).length > 0 ? displaySettings : undefined,
+    }
+  })
 
   const session: SessionData = {
-    version: 1,
+    version: 2,
     viewport,
     tracks: sessionTracks,
   }
@@ -56,6 +87,11 @@ async function createAdapterFromSource(
   source: Record<string, string>,
 ): Promise<{ adapter: GenomicAdapter; type: TrackType } | null> {
   const format = source.format
+
+  if (format === 'builtin' && source.builtinId === 'hg38-sequence') {
+    const adapter = new UcscSequenceAdapter()
+    return { adapter, type: 'sequence' }
+  }
 
   switch (format) {
     case 'bigwig': {
@@ -125,12 +161,28 @@ export async function restoreSession(
   tracks: TrackConfig[]
   errors: string[]
 }> {
-  const session: SessionData = JSON.parse(json)
+  const session = JSON.parse(json)
   const tracks: TrackConfig[] = []
   const errors: string[] = []
 
+  const sessionTracks: SessionTrack[] = session.tracks.map((st: SessionTrack & { settings?: Record<string, unknown> }) => {
+    if (st.displaySettings) return st
+    if (st.settings) {
+      const displaySettings: Record<string, unknown> = {}
+      for (const key of USER_SETTING_KEYS) {
+        if (st.settings[key] !== undefined) displaySettings[key] = st.settings[key]
+      }
+      return { ...st, displaySettings }
+    }
+    return st
+  })
+
   const results = await Promise.allSettled(
-    session.tracks.map(async (st) => {
+    sessionTracks.map(async (st) => {
+      if (st.source.format === 'unknown' || st.source.kind === 'local') {
+        throw new Error(`"${st.name}" was loaded from a local file and cannot be restored without Tauri. Re-open the file.`)
+      }
+
       const missing = await checkFileExists(st.source)
       if (missing.length > 0) {
         throw new Error(`Missing files: ${missing.join(', ')}`)
@@ -143,15 +195,20 @@ export async function restoreSession(
 
       await result.adapter.initialize()
 
+      const settings: Record<string, unknown> = { source: st.source }
+      if (st.displaySettings) {
+        Object.assign(settings, st.displaySettings)
+      }
+
       const track: TrackConfig = {
-        id: `track-${++trackIdCounter}`,
+        id: st.source.builtinId === 'hg38-sequence' ? 'hg38-sequence' : `track-${++trackIdCounter}`,
         name: st.name,
         type: st.type,
         adapter: result.adapter,
         height: st.height,
         color: st.color,
         visible: st.visible,
-        settings: { source: st.source },
+        settings,
       }
       return track
     }),
@@ -181,7 +238,7 @@ export async function saveSessionToFile(sessionJson: string): Promise<void> {
 export async function loadSessionFromFile(): Promise<string | null> {
   const { open } = await import('@tauri-apps/plugin-dialog')
   const path = await open({
-    filters: [{ name: 'Genome Browser Session', extensions: ['gbsession'] }],
+    filters: [{ name: 'Genome Browser Session', extensions: ['gbsession', 'json'] }],
     multiple: false,
   })
   if (!path) return null

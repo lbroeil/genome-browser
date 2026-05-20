@@ -9,7 +9,8 @@ import { useGenomeStore } from '@/store/genomeStore'
 import { useCrosshairStore } from '@/store/crosshairStore'
 import { UcscSequenceAdapter } from '@/adapters/UcscSequenceAdapter'
 import { BookmarkPanel } from './BookmarkPanel'
-import { serializeSession, restoreSession, downloadSession } from '@/export/SessionManager'
+import { serializeSession, restoreSession, saveSessionToFile, loadSessionFromFile } from '@/utils/session'
+import { isTauri } from '@/adapters/TauriFile'
 
 export function Browser() {
   const [showExport, setShowExport] = useState(false)
@@ -42,38 +43,59 @@ export function Browser() {
     })
   }, [addTrack])
 
-  const handleSaveSession = useCallback(() => {
+  const handleSaveSession = useCallback(async () => {
     const { chromosome, start, end } = useGenomeStore.getState()
     const allTracks = useTrackStore.getState().tracks
-    const json = serializeSession({ chromosome, start, end }, allTracks)
-    downloadSession(json, `genome-browser-session_${chromosome}_${start}-${end}.json`)
+    const json = serializeSession(allTracks, { chromosome, start, end })
+
+    if (isTauri()) {
+      try {
+        await saveSessionToFile(json)
+      } catch (err) {
+        setSessionWarnings([`Failed to save: ${err instanceof Error ? err.message : String(err)}`])
+        setTimeout(() => setSessionWarnings([]), 5000)
+      }
+    } else {
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `session_${chromosome}_${start}-${end}.gbsession`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
   }, [])
 
-  const handleLoadSession = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    e.target.value = ''
-
+  const handleLoadSession = useCallback(async (e?: React.ChangeEvent<HTMLInputElement>) => {
     try {
-      const json = await file.text()
+      let json: string | null = null
+
+      if (isTauri()) {
+        json = await loadSessionFromFile()
+      } else {
+        const file = e?.target.files?.[0]
+        if (!file) return
+        if (e) e.target.value = ''
+        json = await file.text()
+      }
+
+      if (!json) return
+
       const result = await restoreSession(json)
 
-      // Clear existing tracks
       const store = useTrackStore.getState()
       for (const t of store.tracks) {
         store.removeTrack(t.id)
       }
 
-      // Restore viewport
-      useGenomeStore.getState().setRegion(result.region)
+      useGenomeStore.getState().setRegion(result.viewport)
 
-      // Add restored tracks
       for (const track of result.tracks) {
         useTrackStore.getState().addTrack(track)
       }
 
-      if (result.warnings.length > 0) {
-        setSessionWarnings(result.warnings)
+      if (result.errors.length > 0) {
+        setSessionWarnings(result.errors)
         setTimeout(() => setSessionWarnings([]), 8000)
       }
     } catch (err) {
@@ -101,7 +123,7 @@ export function Browser() {
             Crosshair
           </button>
           <button
-            onClick={() => sessionInputRef.current?.click()}
+            onClick={isTauri() ? () => handleLoadSession() : () => sessionInputRef.current?.click()}
             className="h-7 px-3 rounded bg-secondary text-secondary-foreground text-xs font-medium hover:bg-accent transition-colors"
           >
             Load Session
@@ -109,7 +131,7 @@ export function Browser() {
           <input
             ref={sessionInputRef}
             type="file"
-            accept=".json"
+            accept=".json,.gbsession"
             onChange={handleLoadSession}
             className="hidden"
           />

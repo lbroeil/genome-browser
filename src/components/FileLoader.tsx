@@ -10,9 +10,16 @@ import { isTauri } from '@/adapters/TauriFile'
 import { TRACK_COLORS } from '@/utils/colors'
 import { normalizeChromosomeName } from '@/utils/coordinates'
 import { useSearchStore, type SearchableFeature } from '@/store/searchStore'
-import { useGenomeStore } from '@/store/genomeStore'
-import { serializeSession, restoreSession, saveSessionToFile, loadSessionFromFile } from '@/utils/session'
 import type { GenomicAdapter } from '@/adapters/types'
+
+async function autoDetectIndex(_dataPath: string, candidates: string[]): Promise<string | undefined> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  for (const candidate of candidates) {
+    const exists: boolean = await invoke('file_exists', { path: candidate })
+    if (exists) return candidate
+  }
+  return undefined
+}
 
 function detectFileType(name: string): { type: TrackType; format: string } | null {
   const lower = name.toLowerCase()
@@ -110,10 +117,8 @@ export function FileLoader() {
   const [showUrlInput, setShowUrlInput] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pendingBam = useRef<File | null>(null)
-  const tracks = useTrackStore((s) => s.tracks)
   const addTrack = useTrackStore((s) => s.addTrack)
   const addSearchFeatures = useSearchStore((s) => s.addFeatures)
-  const { chromosome, start, end, setRegion } = useGenomeStore()
 
   const addTrackFromAdapter = useCallback(async (
     adapter: TrackConfig['adapter'],
@@ -279,10 +284,13 @@ export function FileLoader() {
 
     for (const bamPath of bamPaths) {
       const baseName = bamPath.replace(/\.bam$/i, '')
-      const matchingBai = baiPaths.find((b) => {
+      let matchingBai = baiPaths.find((b) => {
         const bl = b.toLowerCase()
         return bl === `${baseName.toLowerCase()}.bam.bai` || bl === `${baseName.toLowerCase()}.bai`
       })
+      if (!matchingBai && isTauri()) {
+        matchingBai = await autoDetectIndex(bamPath, [`${bamPath}.bai`, `${baseName}.bai`])
+      }
       if (matchingBai) {
         tasks.push((async () => {
           const adapter = new BamAdapter({ bamPath, baiPath: matchingBai })
@@ -295,9 +303,12 @@ export function FileLoader() {
     }
 
     for (const fastaPath of fastaPaths) {
-      const matchingFai = faiPaths.find((f) =>
+      let matchingFai = faiPaths.find((f) =>
         f.toLowerCase() === `${fastaPath.toLowerCase()}.fai`,
       )
+      if (!matchingFai && isTauri()) {
+        matchingFai = await autoDetectIndex(fastaPath, [`${fastaPath}.fai`])
+      }
       if (matchingFai) {
         tasks.push((async () => {
           const adapter = new FastaAdapter({ faPath: fastaPath, faiPath: matchingFai })
@@ -310,9 +321,12 @@ export function FileLoader() {
     }
 
     for (const vcfPath of vcfPaths) {
-      const matchingTbi = tbiPaths.find((t) =>
+      let matchingTbi = tbiPaths.find((t) =>
         t.toLowerCase() === `${vcfPath.toLowerCase()}.tbi`,
       )
+      if (!matchingTbi && isTauri()) {
+        matchingTbi = await autoDetectIndex(vcfPath, [`${vcfPath}.tbi`])
+      }
       if (matchingTbi) {
         tasks.push((async () => {
           const adapter = new VcfAdapter({ vcfPath, tbiPath: matchingTbi })
@@ -459,70 +473,6 @@ export function FileLoader() {
     e.target.value = ''
   }, [loadFiles])
 
-  const handleSaveSession = useCallback(async () => {
-    const json = serializeSession(tracks, { chromosome, start, end })
-    if (isTauri()) {
-      try {
-        await saveSessionToFile(json)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to save session')
-      }
-    } else {
-      const blob = new Blob([json], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'session.gbsession'
-      a.click()
-      URL.revokeObjectURL(url)
-    }
-  }, [tracks, chromosome, start, end])
-
-  const handleLoadSession = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-
-    try {
-      let json: string | null = null
-
-      if (isTauri()) {
-        json = await loadSessionFromFile()
-      } else {
-        json = await new Promise<string | null>((resolve) => {
-          const input = document.createElement('input')
-          input.type = 'file'
-          input.accept = '.gbsession'
-          input.onchange = () => {
-            const file = input.files?.[0]
-            if (file) file.text().then(resolve)
-            else resolve(null)
-          }
-          input.click()
-        })
-      }
-
-      if (!json) { setLoading(false); return }
-
-      const result = await restoreSession(json)
-      setRegion(result.viewport)
-      for (const track of result.tracks) {
-        addTrack(track)
-        if (track.type === 'annotation' || track.type === 'gene_model') {
-          extractSearchableFeatures(track.adapter, track.type).then((features) => {
-            if (features.length > 0) addSearchFeatures(features)
-          })
-        }
-      }
-      if (result.errors.length > 0) {
-        setError(`Some tracks failed: ${result.errors.join('; ')}`)
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load session')
-    } finally {
-      setLoading(false)
-    }
-  }, [addTrack, addSearchFeatures, setRegion])
-
   useEffect(() => {
     if (!isTauri()) return
     let unlisten: (() => void) | undefined
@@ -564,24 +514,6 @@ export function FileLoader() {
           className="h-7 px-3 rounded bg-secondary text-secondary-foreground text-xs font-medium hover:bg-accent transition-colors"
         >
           URL
-        </button>
-
-        <div className="w-px h-5 bg-border" />
-
-        <button
-          onClick={handleSaveSession}
-          className="h-7 px-3 rounded bg-secondary text-secondary-foreground text-xs font-medium hover:bg-accent transition-colors"
-          disabled={loading || tracks.length === 0}
-        >
-          Save Session
-        </button>
-
-        <button
-          onClick={handleLoadSession}
-          className="h-7 px-3 rounded bg-secondary text-secondary-foreground text-xs font-medium hover:bg-accent transition-colors"
-          disabled={loading}
-        >
-          Load Session
         </button>
 
         <span className="text-xs text-muted-foreground">
