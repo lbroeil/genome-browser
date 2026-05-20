@@ -8,6 +8,7 @@ import { useTrackStore } from '@/store/trackStore'
 import { useGenomeStore } from '@/store/genomeStore'
 import { useCrosshairStore } from '@/store/crosshairStore'
 import { UcscSequenceAdapter } from '@/adapters/UcscSequenceAdapter'
+import { BookmarkPanel } from './BookmarkPanel'
 import { serializeSession, restoreSession, downloadSession } from '@/export/SessionManager'
 
 export function Browser() {
@@ -87,6 +88,7 @@ export function Browser() {
       <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-card">
         <h1 className="text-sm font-semibold tracking-tight">genome-browser</h1>
         <div className="flex items-center gap-2">
+          <BookmarkPanel />
           <button
             onClick={toggleCrosshair}
             className={`h-7 px-3 rounded text-xs font-medium transition-colors ${

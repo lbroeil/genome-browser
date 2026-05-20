@@ -266,17 +266,20 @@ export class GffAdapter implements GenomicAdapter {
       let geneStrand: '+' | '-' | undefined
 
       for (const [txId, txData] of geneData.transcripts) {
-        if (txData.exons.length === 0 && !txData.transcript) continue
+        if (txData.exons.length === 0 && txData.cds.length === 0 && !txData.transcript) continue
 
-        const exons: Exon[] = txData.exons
+        // Use CDS entries as exons when no explicit exon features exist
+        const exonSource = txData.exons.length > 0 ? txData.exons : txData.cds
+        const exons: Exon[] = exonSource
           .map((e) => ({ start: e.start, end: e.end }))
           .sort((a, b) => a.start - b.start)
 
-        const txStart = txData.transcript?.start ?? Math.min(...txData.exons.map((e) => e.start))
-        const txEnd = txData.transcript?.end ?? Math.max(...txData.exons.map((e) => e.end))
-        const strand = (txData.transcript?.strand ?? txData.exons[0]?.strand ?? '.') as '+' | '-' | '.'
+        const allCoords = [...txData.exons, ...txData.cds, ...(txData.transcript ? [txData.transcript] : [])]
+        const txStart = txData.transcript?.start ?? Math.min(...allCoords.map((e) => e.start))
+        const txEnd = txData.transcript?.end ?? Math.max(...allCoords.map((e) => e.end))
+        const strand = (txData.transcript?.strand ?? exonSource[0]?.strand ?? '.') as '+' | '-' | '.'
 
-        geneChrom = txData.transcript?.chromosome ?? txData.exons[0]?.chromosome ?? ''
+        geneChrom = txData.transcript?.chromosome ?? exonSource[0]?.chromosome ?? ''
         geneStrand = strand === '+' || strand === '-' ? strand : undefined
         geneStart = Math.min(geneStart, txStart)
         geneEnd = Math.max(geneEnd, txEnd)
@@ -342,8 +345,11 @@ export class GffAdapter implements GenomicAdapter {
 
       if (!geneChrom || geneStart === Infinity) continue
 
-      const geneName = geneData.gene?.attributes.gene_name ?? geneData.gene?.attributes.Name ?? undefined
-      const biotype = geneData.gene?.attributes.gene_biotype ?? geneData.gene?.attributes.gene_type ?? geneData.gene?.attributes.biotype ?? undefined
+      // Extract metadata from gene feature, or fall back to first transcript/CDS attributes
+      const firstTxData = geneData.transcripts.values().next().value
+      const fallbackAttrs = firstTxData?.transcript?.attributes ?? firstTxData?.cds[0]?.attributes ?? firstTxData?.exons[0]?.attributes
+      const geneName = geneData.gene?.attributes.gene_name ?? geneData.gene?.attributes.Name ?? fallbackAttrs?.gene_name ?? fallbackAttrs?.Name ?? undefined
+      const biotype = geneData.gene?.attributes.gene_biotype ?? geneData.gene?.attributes.gene_type ?? geneData.gene?.attributes.biotype ?? fallbackAttrs?.gene_biotype ?? fallbackAttrs?.gene_type ?? undefined
 
       const data: GeneModelData = {
         type: 'gene_model',

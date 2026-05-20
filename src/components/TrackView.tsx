@@ -380,20 +380,23 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
     <div className="border-b border-border">
       {/* Track header */}
       <div className="flex items-center gap-2 px-3 py-1 bg-muted/50 text-xs">
-        {/* Move up/down */}
-        <div className="flex flex-col -my-0.5">
-          <button
-            onClick={() => reorderTracks(index, index - 1)}
-            disabled={index === 0}
-            className="text-muted-foreground hover:text-foreground disabled:opacity-25 leading-none text-[10px]"
-            title="Move up"
-          >▲</button>
-          <button
-            onClick={() => reorderTracks(index, index + 1)}
-            disabled={index === totalTracks - 1}
-            className="text-muted-foreground hover:text-foreground disabled:opacity-25 leading-none text-[10px]"
-            title="Move down"
-          >▼</button>
+        {/* Drag handle + move up/down */}
+        <div className="flex items-center gap-0.5 cursor-grab active:cursor-grabbing" title="Drag to reorder">
+          <span className="text-muted-foreground text-[10px] leading-none select-none">⠿</span>
+          <div className="flex flex-col -my-0.5">
+            <button
+              onClick={() => reorderTracks(index, index - 1)}
+              disabled={index === 0}
+              className="text-muted-foreground hover:text-foreground disabled:opacity-25 leading-none text-[10px]"
+              title="Move up"
+            >▲</button>
+            <button
+              onClick={() => reorderTracks(index, index + 1)}
+              disabled={index === totalTracks - 1}
+              className="text-muted-foreground hover:text-foreground disabled:opacity-25 leading-none text-[10px]"
+              title="Move down"
+            >▼</button>
+          </div>
         </div>
 
         {/* Editable track name */}
@@ -523,6 +526,16 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
         {error && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/50">
             <span className="text-xs text-destructive">{error}</span>
+          </div>
+        )}
+        {!loading && !error && !data && !coverageData && !sequenceData && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <span className="text-xs text-muted-foreground">No data in this region</span>
+          </div>
+        )}
+        {!loading && !error && data && data.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <span className="text-xs text-muted-foreground">No features in this region</span>
           </div>
         )}
         <CrosshairLine />
