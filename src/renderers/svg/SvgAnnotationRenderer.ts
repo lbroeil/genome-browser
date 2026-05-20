@@ -132,7 +132,7 @@ export function renderAnnotationSvg(
       const transcript = feature.data.transcripts[0]
       const midY = y + FEATURE_HEIGHT / 2
 
-      // Intron line — clamped to viewport
+      // Intron line with direction arrows — clamped to viewport
       const txX = bpToPixel(transcript.start, region, width)
       const txXEnd = bpToPixel(transcript.end, region, width)
       const clampedIntron = clampLine(txX, txXEnd, width)
@@ -146,6 +146,36 @@ export function renderAnnotationSvg(
         intronLine.setAttribute('stroke-width', '1')
         intronLine.setAttribute('class', 'intron')
         geneG.appendChild(intronLine)
+
+        // Direction chevrons on intron lines between exons
+        const strand = feature.strand ?? transcript.strand
+        if (strand === '+' || strand === '-') {
+          const exonsSorted = [...transcript.exons].sort((a, b) => a.start - b.start)
+          for (let ei = 0; ei < exonsSorted.length - 1; ei++) {
+            const gapStart = bpToPixel(exonsSorted[ei].end, region, width)
+            const gapEnd = bpToPixel(exonsSorted[ei + 1].start, region, width)
+            const gapMid = (gapStart + gapEnd) / 2
+            if (gapMid < 0 || gapMid > width || gapEnd - gapStart < 12) continue
+            const arrowSize = 3
+            if (strand === '+') {
+              const chevron = document.createElementNS(ns, 'polyline')
+              chevron.setAttribute('points', `${(gapMid - arrowSize).toFixed(1)},${midY - arrowSize} ${gapMid.toFixed(1)},${midY} ${(gapMid - arrowSize).toFixed(1)},${midY + arrowSize}`)
+              chevron.setAttribute('stroke', color)
+              chevron.setAttribute('stroke-width', '1')
+              chevron.setAttribute('fill', 'none')
+              chevron.setAttribute('class', 'direction-arrow')
+              geneG.appendChild(chevron)
+            } else {
+              const chevron = document.createElementNS(ns, 'polyline')
+              chevron.setAttribute('points', `${(gapMid + arrowSize).toFixed(1)},${midY - arrowSize} ${gapMid.toFixed(1)},${midY} ${(gapMid + arrowSize).toFixed(1)},${midY + arrowSize}`)
+              chevron.setAttribute('stroke', color)
+              chevron.setAttribute('stroke-width', '1')
+              chevron.setAttribute('fill', 'none')
+              chevron.setAttribute('class', 'direction-arrow')
+              geneG.appendChild(chevron)
+            }
+          }
+        }
       }
 
       // Exons / CDS — clamped to viewport
