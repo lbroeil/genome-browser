@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useTrackStore, type TrackConfig, type TrackType } from '@/store/trackStore'
 import { BigWigAdapter } from '@/adapters/BigWigAdapter'
 import { BedAdapter } from '@/adapters/BedAdapter'
@@ -6,6 +6,7 @@ import { GffAdapter } from '@/adapters/GffAdapter'
 import { BamAdapter } from '@/adapters/BamAdapter'
 import { VcfAdapter } from '@/adapters/VcfAdapter'
 import { FastaAdapter } from '@/adapters/FastaAdapter'
+import { isTauri } from '@/adapters/TauriFile'
 import { TRACK_COLORS } from '@/utils/colors'
 import { normalizeChromosomeName } from '@/utils/coordinates'
 import { useSearchStore, type SearchableFeature } from '@/store/searchStore'
@@ -249,6 +250,118 @@ export function FileLoader() {
     }
   }, [addTrackFromAdapter])
 
+  const loadFilePaths = useCallback(async (paths: string[]) => {
+    setLoading(true)
+    setError(null)
+
+    const bamPaths: string[] = []
+    const baiPaths: string[] = []
+    const fastaPaths: string[] = []
+    const faiPaths: string[] = []
+    const vcfPaths: string[] = []
+    const tbiPaths: string[] = []
+    const otherPaths: string[] = []
+
+    for (const p of paths) {
+      const lower = p.toLowerCase()
+      if (lower.endsWith('.bam')) bamPaths.push(p)
+      else if (lower.endsWith('.bai') || lower.endsWith('.bam.bai')) baiPaths.push(p)
+      else if (lower.endsWith('.fa') || lower.endsWith('.fasta') || lower.endsWith('.fna')) fastaPaths.push(p)
+      else if (lower.endsWith('.fai')) faiPaths.push(p)
+      else if (lower.endsWith('.vcf.gz')) vcfPaths.push(p)
+      else if (lower.endsWith('.tbi')) tbiPaths.push(p)
+      else otherPaths.push(p)
+    }
+
+    const tasks: Promise<void>[] = []
+
+    for (const bamPath of bamPaths) {
+      const baseName = bamPath.replace(/\.bam$/i, '')
+      const matchingBai = baiPaths.find((b) => {
+        const bl = b.toLowerCase()
+        return bl === `${baseName.toLowerCase()}.bam.bai` || bl === `${baseName.toLowerCase()}.bai`
+      })
+      if (matchingBai) {
+        tasks.push((async () => {
+          const adapter = new BamAdapter({ bamPath, baiPath: matchingBai })
+          await adapter.initialize()
+          addTrackFromAdapter(adapter, 'alignment', bamPath.split('/').pop()!)
+        })())
+      } else {
+        setError('BAM files require a matching .bai index file. Select both files together.')
+      }
+    }
+
+    for (const fastaPath of fastaPaths) {
+      const matchingFai = faiPaths.find((f) =>
+        f.toLowerCase() === `${fastaPath.toLowerCase()}.fai`,
+      )
+      if (matchingFai) {
+        tasks.push((async () => {
+          const adapter = new FastaAdapter({ faPath: fastaPath, faiPath: matchingFai })
+          await adapter.initialize()
+          addTrackFromAdapter(adapter, 'sequence', fastaPath.split('/').pop()!)
+        })())
+      } else {
+        setError('FASTA files require a matching .fai index file. Select both files together.')
+      }
+    }
+
+    for (const vcfPath of vcfPaths) {
+      const matchingTbi = tbiPaths.find((t) =>
+        t.toLowerCase() === `${vcfPath.toLowerCase()}.tbi`,
+      )
+      if (matchingTbi) {
+        tasks.push((async () => {
+          const adapter = new VcfAdapter({ vcfPath, tbiPath: matchingTbi })
+          await adapter.initialize()
+          addTrackFromAdapter(adapter, 'variant', vcfPath.split('/').pop()!)
+        })())
+      } else {
+        setError('VCF files require a matching .tbi index file. Select both files together.')
+      }
+    }
+
+    for (const p of otherPaths) {
+      const filename = p.split('/').pop() || p
+      const detected = detectFileType(filename)
+      if (!detected) {
+        setError(`Unsupported file type: ${filename}`)
+        continue
+      }
+
+      tasks.push((async () => {
+        let adapter: BigWigAdapter | BedAdapter | GffAdapter
+        switch (detected.format) {
+          case 'bigwig':
+            adapter = new BigWigAdapter(p)
+            break
+          case 'bed':
+            adapter = new BedAdapter(p)
+            break
+          case 'gtf':
+            adapter = new GffAdapter(p, 'gtf')
+            break
+          case 'gff3':
+            adapter = new GffAdapter(p, 'gff3')
+            break
+          default:
+            return
+        }
+        await adapter.initialize()
+        addTrackFromAdapter(adapter, detected.type, filename)
+      })())
+    }
+
+    const results = await Promise.allSettled(tasks)
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    if (failed.length > 0) {
+      setError(failed.map((r) => r.reason?.message ?? String(r.reason)).join('; '))
+    }
+
+    setLoading(false)
+  }, [addTrackFromAdapter])
+
   const loadUrl = useCallback(async () => {
     if (!urlInput.trim()) return
     setLoading(true)
@@ -308,6 +421,25 @@ export function FileLoader() {
     }
   }, [urlInput, addTrackFromAdapter])
 
+  const handleOpenClick = useCallback(async () => {
+    if (isTauri()) {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({
+        multiple: true,
+        filters: [{
+          name: 'Genomic Files',
+          extensions: ['bw', 'bigwig', 'bed', 'gtf', 'gff', 'gff3', 'bam', 'bai', 'vcf.gz', 'tbi', 'fa', 'fasta', 'fna', 'fai'],
+        }],
+      })
+      if (selected) {
+        const paths = Array.isArray(selected) ? selected : [selected]
+        loadFilePaths(paths)
+      }
+    } else {
+      fileInputRef.current?.click()
+    }
+  }, [loadFilePaths])
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragOver(false)
@@ -321,6 +453,24 @@ export function FileLoader() {
     e.target.value = ''
   }, [loadFiles])
 
+  useEffect(() => {
+    if (!isTauri()) return
+    let unlisten: (() => void) | undefined
+    import('@tauri-apps/api/webview').then(({ getCurrentWebview }) => {
+      getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type === 'over') {
+          setIsDragOver(true)
+        } else if (event.payload.type === 'drop') {
+          setIsDragOver(false)
+          loadFilePaths(event.payload.paths)
+        } else {
+          setIsDragOver(false)
+        }
+      }).then((fn) => { unlisten = fn })
+    })
+    return () => { unlisten?.() }
+  }, [loadFilePaths])
+
   return (
     <div className="px-4 py-2 border-b border-border">
       <div
@@ -332,7 +482,7 @@ export function FileLoader() {
         onDrop={handleDrop}
       >
         <button
-          onClick={() => fileInputRef.current?.click()}
+          onClick={handleOpenClick}
           className="h-7 px-3 rounded bg-secondary text-secondary-foreground text-xs font-medium hover:bg-accent transition-colors"
           disabled={loading}
         >
