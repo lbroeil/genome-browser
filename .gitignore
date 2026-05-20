@@ -25,6 +25,7 @@ src-tauri/target
 *.vcf
 *.fa
 *.fasta
+*.gbsession
 
 # Editor directories and files
 .vscode/*

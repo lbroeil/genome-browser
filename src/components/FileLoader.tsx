@@ -10,6 +10,8 @@ import { isTauri } from '@/adapters/TauriFile'
 import { TRACK_COLORS } from '@/utils/colors'
 import { normalizeChromosomeName } from '@/utils/coordinates'
 import { useSearchStore, type SearchableFeature } from '@/store/searchStore'
+import { useGenomeStore } from '@/store/genomeStore'
+import { serializeSession, restoreSession, saveSessionToFile, loadSessionFromFile } from '@/utils/session'
 import type { GenomicAdapter } from '@/adapters/types'
 
 function detectFileType(name: string): { type: TrackType; format: string } | null {
@@ -108,19 +110,19 @@ export function FileLoader() {
   const [showUrlInput, setShowUrlInput] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pendingBam = useRef<File | null>(null)
+  const tracks = useTrackStore((s) => s.tracks)
   const addTrack = useTrackStore((s) => s.addTrack)
   const addSearchFeatures = useSearchStore((s) => s.addFeatures)
+  const { chromosome, start, end, setRegion } = useGenomeStore()
 
   const addTrackFromAdapter = useCallback(async (
     adapter: TrackConfig['adapter'],
     type: TrackType,
     name: string,
-    sourceUrl?: string,
-    sourceFormat?: string,
+    source?: Record<string, string>,
   ) => {
     const settings: Record<string, unknown> = {}
-    if (sourceUrl) settings.sourceUrl = sourceUrl
-    if (sourceFormat) settings.sourceFormat = sourceFormat
+    if (source) settings.source = source
 
     const track: TrackConfig = {
       id: `track-${++trackIdCounter}`,
@@ -285,7 +287,7 @@ export function FileLoader() {
         tasks.push((async () => {
           const adapter = new BamAdapter({ bamPath, baiPath: matchingBai })
           await adapter.initialize()
-          addTrackFromAdapter(adapter, 'alignment', bamPath.split('/').pop()!)
+          addTrackFromAdapter(adapter, 'alignment', bamPath.split('/').pop()!, { format: 'bam', bamPath, baiPath: matchingBai })
         })())
       } else {
         setError('BAM files require a matching .bai index file. Select both files together.')
@@ -300,7 +302,7 @@ export function FileLoader() {
         tasks.push((async () => {
           const adapter = new FastaAdapter({ faPath: fastaPath, faiPath: matchingFai })
           await adapter.initialize()
-          addTrackFromAdapter(adapter, 'sequence', fastaPath.split('/').pop()!)
+          addTrackFromAdapter(adapter, 'sequence', fastaPath.split('/').pop()!, { format: 'fasta', faPath: fastaPath, faiPath: matchingFai })
         })())
       } else {
         setError('FASTA files require a matching .fai index file. Select both files together.')
@@ -315,7 +317,7 @@ export function FileLoader() {
         tasks.push((async () => {
           const adapter = new VcfAdapter({ vcfPath, tbiPath: matchingTbi })
           await adapter.initialize()
-          addTrackFromAdapter(adapter, 'variant', vcfPath.split('/').pop()!)
+          addTrackFromAdapter(adapter, 'variant', vcfPath.split('/').pop()!, { format: 'vcf', vcfPath, tbiPath: matchingTbi })
         })())
       } else {
         setError('VCF files require a matching .tbi index file. Select both files together.')
@@ -349,7 +351,7 @@ export function FileLoader() {
             return
         }
         await adapter.initialize()
-        addTrackFromAdapter(adapter, detected.type, filename)
+        addTrackFromAdapter(adapter, detected.type, filename, { format: detected.format, path: p })
       })())
     }
 
@@ -411,7 +413,11 @@ export function FileLoader() {
       }
 
       await adapter.initialize()
-      addTrackFromAdapter(adapter, detected.type, filename, url, detected.format)
+      const source: Record<string, string> = { format: detected.format, url }
+      if (detected.format === 'bam') source.baiUrl = url + '.bai'
+      if (detected.format === 'vcf') source.tbiUrl = url + '.tbi'
+      if (detected.format === 'fasta') source.faiUrl = url + '.fai'
+      addTrackFromAdapter(adapter, detected.type, filename, source)
       setUrlInput('')
       setShowUrlInput(false)
     } catch (e) {
@@ -452,6 +458,70 @@ export function FileLoader() {
     loadFiles(files)
     e.target.value = ''
   }, [loadFiles])
+
+  const handleSaveSession = useCallback(async () => {
+    const json = serializeSession(tracks, { chromosome, start, end })
+    if (isTauri()) {
+      try {
+        await saveSessionToFile(json)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to save session')
+      }
+    } else {
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'session.gbsession'
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  }, [tracks, chromosome, start, end])
+
+  const handleLoadSession = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+
+    try {
+      let json: string | null = null
+
+      if (isTauri()) {
+        json = await loadSessionFromFile()
+      } else {
+        json = await new Promise<string | null>((resolve) => {
+          const input = document.createElement('input')
+          input.type = 'file'
+          input.accept = '.gbsession'
+          input.onchange = () => {
+            const file = input.files?.[0]
+            if (file) file.text().then(resolve)
+            else resolve(null)
+          }
+          input.click()
+        })
+      }
+
+      if (!json) { setLoading(false); return }
+
+      const result = await restoreSession(json)
+      setRegion(result.viewport)
+      for (const track of result.tracks) {
+        addTrack(track)
+        if (track.type === 'annotation' || track.type === 'gene_model') {
+          extractSearchableFeatures(track.adapter, track.type).then((features) => {
+            if (features.length > 0) addSearchFeatures(features)
+          })
+        }
+      }
+      if (result.errors.length > 0) {
+        setError(`Some tracks failed: ${result.errors.join('; ')}`)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load session')
+    } finally {
+      setLoading(false)
+    }
+  }, [addTrack, addSearchFeatures, setRegion])
 
   useEffect(() => {
     if (!isTauri()) return
@@ -494,6 +564,24 @@ export function FileLoader() {
           className="h-7 px-3 rounded bg-secondary text-secondary-foreground text-xs font-medium hover:bg-accent transition-colors"
         >
           URL
+        </button>
+
+        <div className="w-px h-5 bg-border" />
+
+        <button
+          onClick={handleSaveSession}
+          className="h-7 px-3 rounded bg-secondary text-secondary-foreground text-xs font-medium hover:bg-accent transition-colors"
+          disabled={loading || tracks.length === 0}
+        >
+          Save Session
+        </button>
+
+        <button
+          onClick={handleLoadSession}
+          className="h-7 px-3 rounded bg-secondary text-secondary-foreground text-xs font-medium hover:bg-accent transition-colors"
+          disabled={loading}
+        >
+          Load Session
         </button>
 
         <span className="text-xs text-muted-foreground">

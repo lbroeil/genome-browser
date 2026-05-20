@@ -28,6 +28,11 @@ fn file_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+#[tauri::command]
+fn write_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, &contents).map_err(|e| format!("{}: {}", path, e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -37,6 +42,7 @@ pub fn run() {
             read_file_all,
             file_stat,
             file_exists,
+            write_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
