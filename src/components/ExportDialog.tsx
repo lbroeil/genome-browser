@@ -132,7 +132,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           trackElements.push({ element, height: track.height, name: track.name })
         } else if (track.type === 'annotation' || track.type === 'gene_model') {
           const features = await track.adapter.getFeatures(queryRegion)
-          const annMode = (track.settings.displayMode as SvgAnnotationDisplayMode) ?? 'collapsed'
+          const annMode = (track.settings.displayMode as SvgAnnotationDisplayMode) ?? 'expanded'
           const strandColors = track.settings.forwardColor && track.settings.reverseColor
             ? { forward: track.settings.forwardColor as string, reverse: track.settings.reverseColor as string }
             : undefined

@@ -81,7 +81,7 @@ export function renderAnnotationSvg(
   height: number,
   defaultColor: string,
   trackName: string,
-  displayMode: SvgAnnotationDisplayMode = 'collapsed',
+  displayMode: SvgAnnotationDisplayMode = 'expanded',
   strandColors?: { forward: string; reverse: string },
 ): SVGGElement {
   const ns = 'http://www.w3.org/2000/svg'
@@ -106,6 +106,7 @@ export function renderAnnotationSvg(
 
   const labelsGroup = document.createElementNS(ns, 'g')
   labelsGroup.setAttribute('class', 'labels')
+  const rowLabelEnds: Record<number, number> = {}
 
   for (const { feature, row, x, width: w } of layout) {
     const y = row * (ROW_HEIGHT + ROW_GAP) + 4
@@ -253,14 +254,19 @@ export function renderAnnotationSvg(
       }
 
       if (label) {
-        const text = document.createElementNS(ns, 'text')
-        text.setAttribute('x', String(Math.max(Math.min(x + 1, width - 10), 2)))
-        text.setAttribute('y', String(y + FEATURE_HEIGHT + 12))
-        text.setAttribute('font-size', '10')
-        text.setAttribute('font-style', 'italic')
-        text.setAttribute('class', 'gene-label')
-        text.textContent = label
-        labelsGroup.appendChild(text)
+        const labelX = Math.max(Math.min(x + 1, width - 10), 2)
+        const estWidth = label.length * 6
+        if (!rowLabelEnds[row] || labelX >= rowLabelEnds[row]) {
+          const text = document.createElementNS(ns, 'text')
+          text.setAttribute('x', String(labelX))
+          text.setAttribute('y', String(y + FEATURE_HEIGHT + 12))
+          text.setAttribute('font-size', '10')
+          text.setAttribute('font-style', 'italic')
+          text.setAttribute('class', 'gene-label')
+          text.textContent = label
+          labelsGroup.appendChild(text)
+          rowLabelEnds[row] = labelX + estWidth + 6
+        }
       }
     } else {
       // Simple annotation — clamped to viewport
@@ -281,14 +287,19 @@ export function renderAnnotationSvg(
 
       // Label
       if (feature.data.type === 'annotation' && feature.data.name) {
-        const text = document.createElementNS(ns, 'text')
-        text.setAttribute('x', String(Math.max(Math.min(x + 1, width - 10), 2)))
-        text.setAttribute('y', String(y + FEATURE_HEIGHT + 12))
-        text.setAttribute('font-size', '10')
-        text.setAttribute('font-style', 'italic')
-        text.setAttribute('class', 'feature-label')
-        text.textContent = feature.data.name
-        labelsGroup.appendChild(text)
+        const labelX = Math.max(Math.min(x + 1, width - 10), 2)
+        const estWidth = feature.data.name.length * 6
+        if (!rowLabelEnds[row] || labelX >= rowLabelEnds[row]) {
+          const text = document.createElementNS(ns, 'text')
+          text.setAttribute('x', String(labelX))
+          text.setAttribute('y', String(y + FEATURE_HEIGHT + 12))
+          text.setAttribute('font-size', '10')
+          text.setAttribute('font-style', 'italic')
+          text.setAttribute('class', 'feature-label')
+          text.textContent = feature.data.name
+          labelsGroup.appendChild(text)
+          rowLabelEnds[row] = labelX + estWidth + 6
+        }
       }
     }
   }

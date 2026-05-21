@@ -70,7 +70,7 @@ export function renderAnnotationCanvas(
   height: number,
   defaultColor: string,
   labelColor?: string,
-  displayMode: AnnotationDisplayMode = 'collapsed',
+  displayMode: AnnotationDisplayMode = 'expanded',
   strandColors?: { forward: string; reverse: string },
 ) {
   if (features.length === 0) return
@@ -79,6 +79,7 @@ export function renderAnnotationCanvas(
   const useFrameColor = displayMode === 'frame'
   const renderFeatures = displayMode === 'expanded' ? expandTranscripts(features) : features
   const layout = layoutFeatures(renderFeatures, region, width)
+  const rowLabelEnds: Record<number, number> = {}
 
   for (const { feature, row, x, width: w } of layout) {
     const y = row * (ROW_HEIGHT + ROW_GAP) + 4
@@ -192,7 +193,30 @@ export function renderAnnotationCanvas(
       ctx.font = 'italic 10px ui-sans-serif, system-ui, sans-serif'
       ctx.textAlign = 'left'
       const labelX = Math.max(x + 1, 2)
-      ctx.fillText(label, labelX, y + FEATURE_HEIGHT + 12)
+      const labelWidth = ctx.measureText(label).width
+      // Skip label if it would overlap a previously drawn label on this row
+      if (!rowLabelEnds[row] || labelX >= rowLabelEnds[row]) {
+        ctx.fillText(label, labelX, y + FEATURE_HEIGHT + 12)
+        rowLabelEnds[row] = labelX + labelWidth + 6
+      }
     }
   }
+}
+
+const MAX_ANNOTATION_HEIGHT = 500
+const MIN_ANNOTATION_HEIGHT = 60
+
+export function getAnnotationTrackHeight(
+  features: GenomicFeature[],
+  region: GenomicRegion,
+  canvasWidth: number,
+  displayMode: AnnotationDisplayMode = 'expanded',
+): number {
+  if (features.length === 0) return MIN_ANNOTATION_HEIGHT
+  const renderFeatures = displayMode === 'expanded' ? expandTranscripts(features) : features
+  const layout = layoutFeatures(renderFeatures, region, canvasWidth)
+  if (layout.length === 0) return MIN_ANNOTATION_HEIGHT
+  const maxRow = Math.max(...layout.map((l) => l.row))
+  const idealHeight = (maxRow + 1) * (ROW_HEIGHT + ROW_GAP) + 20
+  return Math.min(MAX_ANNOTATION_HEIGHT, Math.max(MIN_ANNOTATION_HEIGHT, idealHeight))
 }

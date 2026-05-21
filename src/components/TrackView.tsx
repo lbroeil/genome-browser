@@ -3,10 +3,10 @@ import { useGenomeStore } from '@/store/genomeStore'
 import { useThemeColors } from '@/hooks/useThemeColors'
 import { mapChromosomeName } from '@/utils/coordinates'
 import { useTrackStore, type TrackConfig } from '@/store/trackStore'
-import { pixelToBp } from '@/utils/coordinates'
+import { pixelToBp, bpToPixel } from '@/utils/coordinates'
 import { useTranscriptViewStore } from '@/store/transcriptViewStore'
 import { renderCoverageCanvas, type CoverageDisplayMode } from '@/renderers/canvas/CanvasCoverageRenderer'
-import { renderAnnotationCanvas, type AnnotationDisplayMode } from '@/renderers/canvas/CanvasAnnotationRenderer'
+import { renderAnnotationCanvas, getAnnotationTrackHeight, type AnnotationDisplayMode } from '@/renderers/canvas/CanvasAnnotationRenderer'
 import { renderAlignmentCanvas } from '@/renderers/canvas/CanvasAlignmentRenderer'
 import { renderVariantCanvas } from '@/renderers/canvas/CanvasVariantRenderer'
 import { renderSequenceCanvas, getSequenceTrackHeight, type TranslationStrand } from '@/renderers/canvas/CanvasSequenceRenderer'
@@ -200,6 +200,20 @@ export function TrackView({ track, index, totalTracks, onDragHandleStart, onDrag
     }
   }, [track.type, track.id, track.height, start, end, seqStrand, updateTrack, txActive, txStart, txEnd])
 
+  // Auto-resize annotation/gene_model tracks to fit visible features
+  const annDisplayMode = (track.settings.displayMode as AnnotationDisplayMode) ?? 'expanded'
+  useEffect(() => {
+    if (track.type !== 'annotation' && track.type !== 'gene_model') return
+    if (!data || data.length === 0) return
+    const container = containerRef.current
+    if (!container) return
+    const width = container.getBoundingClientRect().width
+    const idealHeight = getAnnotationTrackHeight(data, effectiveRegion, width, annDisplayMode)
+    if (idealHeight !== track.height) {
+      updateTrack(track.id, { height: idealHeight })
+    }
+  }, [track.type, track.id, track.height, data, effectiveRegion, annDisplayMode, updateTrack])
+
   // Render to canvas
   const render = useCallback(() => {
     const canvas = canvasRef.current
@@ -234,7 +248,7 @@ export function TrackView({ track, index, totalTracks, onDragHandleStart, onDrag
         ? { forward: track.settings.forwardColor as string, reverse: track.settings.reverseColor as string }
         : undefined
       renderAnnotationCanvas(ctx, data, effectiveRegion, width, track.height, track.color, colors.foreground,
-        (track.settings.displayMode as AnnotationDisplayMode) ?? 'collapsed', strandColors)
+        (track.settings.displayMode as AnnotationDisplayMode) ?? 'expanded', strandColors)
     }
   }, [data, coverageData, sequenceData, track.height, track.color, track.type, track.settings, effectiveRegion, colors.foreground, txActive])
 
@@ -361,55 +375,89 @@ export function TrackView({ track, index, totalTracks, onDragHandleStart, onDrag
   const handleFeatureClick = (e: React.MouseEvent) => {
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect || !data) return
-    const clickBp = pixelToBp(e.clientX - rect.left, region, rect.width)
+    const clickPxX = e.clientX - rect.left
+    const clickPxY = e.clientY - rect.top
 
-    // Find the clicked feature
-    for (const feature of data) {
-      if (clickBp >= feature.start && clickBp < feature.end) {
-        let mapper: TranscriptCoordinateMapper | null = null
-        let label = ''
-        let cds: { txStart: number; txEnd: number } | undefined
+    const displayMode = (track.settings.displayMode as string) ?? 'expanded'
 
-        if (feature.data.type === 'gene_model' && feature.data.transcripts.length > 0) {
-          const transcript = feature.data.transcripts[0]
-          mapper = TranscriptCoordinateMapper.fromTranscript(transcript, feature.chromosome)
-          label = feature.data.geneName ?? feature.data.geneId
-          if (transcript.id) label += ` · ${transcript.id}`
-
-          if (transcript.cds && transcript.cds.length > 0) {
-            const cdsGenomicStart = Math.min(...transcript.cds.map((c) => c.start))
-            const cdsGenomicEnd = Math.max(...transcript.cds.map((c) => c.end))
-            const txCdsStart = mapper.genomicToTranscript(cdsGenomicStart)
-            const txCdsEnd = mapper.genomicToTranscript(cdsGenomicEnd - 1)
-            if (txCdsStart !== null && txCdsEnd !== null) {
-              cds = { txStart: Math.min(txCdsStart, txCdsEnd), txEnd: Math.max(txCdsStart, txCdsEnd) + 1 }
-            }
+    // In expanded mode, split gene models into per-transcript features so each is clickable
+    let clickFeatures = data
+    if (displayMode === 'expanded') {
+      const expanded: GenomicFeature[] = []
+      for (const f of data) {
+        if (f.data.type === 'gene_model' && f.data.transcripts.length > 0) {
+          for (const tx of f.data.transcripts) {
+            expanded.push({ ...f, id: `${f.id}-${tx.id}`, start: tx.start, end: tx.end, data: { ...f.data, transcripts: [tx] } })
           }
-        } else if (
-          feature.data.type === 'annotation' &&
-          feature.data.blockStarts &&
-          feature.data.blockSizes &&
-          feature.data.blockCount &&
-          feature.data.blockCount > 1
-        ) {
-          mapper = TranscriptCoordinateMapper.fromBed12(feature)
-          label = feature.data.name ?? feature.id
-
-          if (feature.data.thickStart !== undefined && feature.data.thickEnd !== undefined &&
-              feature.data.thickEnd > feature.data.thickStart) {
-            const txCdsStart = mapper.genomicToTranscript(feature.data.thickStart)
-            const txCdsEnd = mapper.genomicToTranscript(feature.data.thickEnd - 1)
-            if (txCdsStart !== null && txCdsEnd !== null) {
-              cds = { txStart: Math.min(txCdsStart, txCdsEnd), txEnd: Math.max(txCdsStart, txCdsEnd) + 1 }
-            }
-          }
+        } else {
+          expanded.push(f)
         }
-
-        if (mapper && mapper.txLength > 0) {
-          useTranscriptViewStore.getState().enter(mapper, feature.id, label, cds)
-        }
-        break
       }
+      clickFeatures = expanded
+    }
+
+    // Compute layout (must match renderer: ROW_HEIGHT=26, ROW_GAP=2, FEATURE_HEIGHT=10)
+    const ROW_H = 26, ROW_GAP = 2, FEAT_H = 10
+    const sorted = [...clickFeatures].sort((a, b) => a.start - b.start)
+    const rowEnds: number[] = []
+
+    for (const feature of sorted) {
+      const x = bpToPixel(feature.start, region, rect.width)
+      const xEnd = bpToPixel(feature.end, region, rect.width)
+      const w = Math.max(1, xEnd - x)
+
+      let row = 0
+      while (row < rowEnds.length && rowEnds[row] > x - 2) row++
+      if (row >= rowEnds.length) rowEnds.push(0)
+      rowEnds[row] = x + w
+
+      const y = row * (ROW_H + ROW_GAP) + 4
+      if (clickPxX < x || clickPxX > x + w || clickPxY < y || clickPxY > y + FEAT_H) continue
+
+      // Hit — build mapper for this feature
+      let mapper: TranscriptCoordinateMapper | null = null
+      let label = ''
+      let cds: { txStart: number; txEnd: number } | undefined
+
+      if (feature.data.type === 'gene_model' && feature.data.transcripts.length > 0) {
+        const transcript = feature.data.transcripts[0]
+        mapper = TranscriptCoordinateMapper.fromTranscript(transcript, feature.chromosome)
+        label = feature.data.geneName ?? feature.data.geneId
+        if (transcript.id) label += ` · ${transcript.id}`
+
+        if (transcript.cds && transcript.cds.length > 0) {
+          const cdsGenomicStart = Math.min(...transcript.cds.map((c) => c.start))
+          const cdsGenomicEnd = Math.max(...transcript.cds.map((c) => c.end))
+          const txCdsStart = mapper.genomicToTranscript(cdsGenomicStart)
+          const txCdsEnd = mapper.genomicToTranscript(cdsGenomicEnd - 1)
+          if (txCdsStart !== null && txCdsEnd !== null) {
+            cds = { txStart: Math.min(txCdsStart, txCdsEnd), txEnd: Math.max(txCdsStart, txCdsEnd) + 1 }
+          }
+        }
+      } else if (
+        feature.data.type === 'annotation' &&
+        feature.data.blockStarts &&
+        feature.data.blockSizes &&
+        feature.data.blockCount &&
+        feature.data.blockCount > 1
+      ) {
+        mapper = TranscriptCoordinateMapper.fromBed12(feature)
+        label = feature.data.name ?? feature.id
+
+        if (feature.data.thickStart !== undefined && feature.data.thickEnd !== undefined &&
+            feature.data.thickEnd > feature.data.thickStart) {
+          const txCdsStart = mapper.genomicToTranscript(feature.data.thickStart)
+          const txCdsEnd = mapper.genomicToTranscript(feature.data.thickEnd - 1)
+          if (txCdsStart !== null && txCdsEnd !== null) {
+            cds = { txStart: Math.min(txCdsStart, txCdsEnd), txEnd: Math.max(txCdsStart, txCdsEnd) + 1 }
+          }
+        }
+      }
+
+      if (mapper && mapper.txLength > 0) {
+        useTranscriptViewStore.getState().enter(mapper, feature.id, label, cds)
+      }
+      break
     }
   }
 
@@ -487,7 +535,7 @@ export function TrackView({ track, index, totalTracks, onDragHandleStart, onDrag
         {(track.type === 'gene_model' || track.type === 'annotation') && (
           <>
             <select
-              value={(track.settings.displayMode as string) ?? 'collapsed'}
+              value={(track.settings.displayMode as string) ?? 'expanded'}
               onChange={(e) => updateTrack(track.id, { settings: { ...track.settings, displayMode: e.target.value } })}
               className="h-5 px-1 rounded border border-input bg-background text-xs"
               title="Display mode"
