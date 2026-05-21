@@ -1,5 +1,6 @@
 import type { GenomicAdapter, CoverageBin, GenomicFeature } from '@/adapters/types'
 import type { TranscriptCoordinateMapper } from './TranscriptCoordinateMapper'
+import { reverseComplement } from './translation'
 
 /**
  * Fetch coverage data from an adapter and remap it to transcript coordinates
@@ -54,6 +55,37 @@ export async function fetchTranscriptCoverage(
   }
 
   return allBins.sort((a, b) => a.start - b.start)
+}
+
+/**
+ * Fetch the spliced transcript sequence for a transcript range.
+ * Fetches each exonic segment from the adapter, concatenates in transcript order,
+ * and reverse-complements for minus-strand transcripts.
+ */
+export async function fetchTranscriptSequence(
+  adapter: GenomicAdapter,
+  mapper: TranscriptCoordinateMapper,
+  txStart: number,
+  txEnd: number,
+): Promise<string> {
+  if (!adapter.getSequence) return ''
+
+  const genomicRegions = mapper.getGenomicRegionsForTranscriptRange(txStart, txEnd)
+  if (genomicRegions.length === 0) return ''
+
+  const segments: string[] = []
+  for (const region of genomicRegions) {
+    const seq = await adapter.getSequence(region)
+    segments.push(seq)
+  }
+
+  let spliced = segments.join('')
+
+  if (mapper.strand === '-') {
+    spliced = reverseComplement(spliced)
+  }
+
+  return spliced
 }
 
 /**

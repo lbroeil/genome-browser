@@ -1,6 +1,11 @@
 import { create } from 'zustand'
 import type { TranscriptCoordinateMapper } from '@/utils/TranscriptCoordinateMapper'
 
+interface CdsRange {
+  txStart: number
+  txEnd: number
+}
+
 interface TranscriptViewState {
   active: boolean
   mapper: TranscriptCoordinateMapper | null
@@ -8,8 +13,9 @@ interface TranscriptViewState {
   featureName: string | null
   txStart: number
   txEnd: number
+  cdsRange: CdsRange | null
 
-  enter: (mapper: TranscriptCoordinateMapper, featureId: string, name: string) => void
+  enter: (mapper: TranscriptCoordinateMapper, featureId: string, name: string, cds?: CdsRange) => void
   exit: () => void
   setTxRegion: (start: number, end: number) => void
   panTx: (deltaTx: number) => void
@@ -23,8 +29,9 @@ export const useTranscriptViewStore = create<TranscriptViewState>((set, get) => 
   featureName: null,
   txStart: 0,
   txEnd: 0,
+  cdsRange: null,
 
-  enter: (mapper, featureId, name) => {
+  enter: (mapper, featureId, name, cds) => {
     set({
       active: true,
       mapper,
@@ -32,6 +39,7 @@ export const useTranscriptViewStore = create<TranscriptViewState>((set, get) => 
       featureName: name,
       txStart: 0,
       txEnd: mapper.txLength,
+      cdsRange: cds ?? null,
     })
   },
 
@@ -43,6 +51,7 @@ export const useTranscriptViewStore = create<TranscriptViewState>((set, get) => 
       featureName: null,
       txStart: 0,
       txEnd: 0,
+      cdsRange: null,
     })
   },
 
@@ -51,7 +60,7 @@ export const useTranscriptViewStore = create<TranscriptViewState>((set, get) => 
     if (!mapper) return
     const cStart = Math.max(0, start)
     const cEnd = Math.min(mapper.txLength, end)
-    if (cEnd - cStart < 10) return // minimum 10bp
+    if (cEnd - cStart < 10) return
     set({ txStart: cStart, txEnd: cEnd })
   },
 

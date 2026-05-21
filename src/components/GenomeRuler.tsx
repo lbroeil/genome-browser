@@ -17,6 +17,7 @@ export function GenomeRuler() {
   const txStart = useTranscriptViewStore((s) => s.txStart)
   const txEnd = useTranscriptViewStore((s) => s.txEnd)
   const txFeatureName = useTranscriptViewStore((s) => s.featureName)
+  const txCdsRange = useTranscriptViewStore((s) => s.cdsRange)
   const isDragging = useRef(false)
   const lastX = useRef(0)
   const colors = useThemeColors()
@@ -104,7 +105,7 @@ export function GenomeRuler() {
       }
       ctx.setLineDash([])
 
-      // Frame color bands at top
+      // Frame color bands at top (transcript-relative frame)
       const span = effEnd - effStart
       if (span <= 3000) {
         const bandH = 3
@@ -113,6 +114,46 @@ export function GenomeRuler() {
           const x2 = bpToPixel(bp + 1, effRegion, width)
           ctx.fillStyle = FRAME_COLORS[bp % 3]
           ctx.fillRect(x1, 0, Math.max(1, x2 - x1), bandH)
+        }
+      }
+
+      // CDS reference bar — shows annotated CDS with frame coloring relative to CDS start
+      if (txCdsRange) {
+        const cdsBarH = 6
+        const cdsBarY = RULER_HEIGHT - 10
+        const cdsVisStart = Math.max(txCdsRange.txStart, effStart)
+        const cdsVisEnd = Math.min(txCdsRange.txEnd, effEnd)
+
+        if (cdsVisStart < cdsVisEnd) {
+          const cdsX1 = bpToPixel(cdsVisStart, effRegion, width)
+          const cdsX2 = bpToPixel(cdsVisEnd, effRegion, width)
+
+          // Background bar for CDS extent
+          ctx.fillStyle = 'rgba(128,128,128,0.2)'
+          ctx.fillRect(cdsX1, cdsBarY, cdsX2 - cdsX1, cdsBarH)
+
+          // Frame-colored codon blocks within visible CDS
+          if (span <= 3000) {
+            for (let bp = cdsVisStart; bp < cdsVisEnd; bp++) {
+              const frame = (bp - txCdsRange.txStart) % 3
+              const x1 = bpToPixel(bp, effRegion, width)
+              const x2 = bpToPixel(bp + 1, effRegion, width)
+              ctx.fillStyle = FRAME_COLORS[frame]
+              ctx.fillRect(x1, cdsBarY, Math.max(1, x2 - x1), cdsBarH)
+            }
+          } else {
+            ctx.fillStyle = FRAME_COLORS[0]
+            ctx.fillRect(cdsX1, cdsBarY, cdsX2 - cdsX1, cdsBarH)
+          }
+
+          // CDS label
+          ctx.fillStyle = colors.foreground
+          ctx.font = '9px ui-sans-serif, system-ui, sans-serif'
+          ctx.textAlign = 'left'
+          const cdsLabelX = Math.max(cdsX1 + 2, 2)
+          if (cdsX2 - cdsX1 > 30) {
+            ctx.fillText('CDS', cdsLabelX, cdsBarY - 1)
+          }
         }
       }
     }
@@ -135,7 +176,7 @@ export function GenomeRuler() {
       ctx.fillStyle = colors.foreground
       ctx.fillText(chromosome, 4, 14)
     }
-  }, [chromosome, start, end, colors, txActive, txMapper, txStart, txEnd, txFeatureName, effStart, effEnd, effRegion])
+  }, [chromosome, start, end, colors, txActive, txMapper, txStart, txEnd, txFeatureName, txCdsRange, effStart, effEnd, effRegion])
 
   // Resize observer
   useEffect(() => {

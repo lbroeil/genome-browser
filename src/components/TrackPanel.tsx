@@ -65,20 +65,23 @@ export function TrackPanel() {
       {tracks.map((track, index) => (
         <div
           key={track.id}
-          draggable
-          onDragStart={(e) => handleDragStart(index, e)}
           onDragOver={(e) => handleDragOver(index, e)}
           onDragEnter={(e) => handleDragEnter(index, e)}
           onDragLeave={() => handleDragLeave(index)}
           onDrop={(e) => handleDrop(index, e)}
-          onDragEnd={handleDragEnd}
           className={`${dragIndex === index ? 'opacity-40' : ''} ${
             dropIndex === index && dragIndex !== null && dragIndex !== index
               ? 'border-t-2 border-primary'
               : ''
           }`}
         >
-          <TrackView track={track} index={index} totalTracks={tracks.length} />
+          <TrackView
+            track={track}
+            index={index}
+            totalTracks={tracks.length}
+            onDragHandleStart={(e) => handleDragStart(index, e)}
+            onDragHandleEnd={handleDragEnd}
+          />
         </div>
       ))}
     </div>

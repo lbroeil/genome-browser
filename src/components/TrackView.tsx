@@ -10,7 +10,7 @@ import { renderAnnotationCanvas, type AnnotationDisplayMode } from '@/renderers/
 import { renderAlignmentCanvas } from '@/renderers/canvas/CanvasAlignmentRenderer'
 import { renderVariantCanvas } from '@/renderers/canvas/CanvasVariantRenderer'
 import { renderSequenceCanvas, getSequenceTrackHeight, type TranslationStrand } from '@/renderers/canvas/CanvasSequenceRenderer'
-import { fetchTranscriptCoverage, remapFeaturesToTranscript } from '@/utils/transcriptData'
+import { fetchTranscriptCoverage, fetchTranscriptSequence, remapFeaturesToTranscript } from '@/utils/transcriptData'
 import { TranscriptCoordinateMapper } from '@/utils/TranscriptCoordinateMapper'
 import { useCrosshairStore } from '@/store/crosshairStore'
 import type { GenomicFeature, CoverageBin } from '@/adapters/types'
@@ -19,9 +19,11 @@ interface TrackViewProps {
   track: TrackConfig
   index: number
   totalTracks: number
+  onDragHandleStart?: (e: React.DragEvent) => void
+  onDragHandleEnd?: () => void
 }
 
-export function TrackView({ track, index, totalTracks }: TrackViewProps) {
+export function TrackView({ track, index, totalTracks, onDragHandleStart, onDragHandleEnd }: TrackViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const { chromosome, start, end, pan, zoom, setRegion } = useGenomeStore()
@@ -96,8 +98,24 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
               setCoverageData(null)
               setSequenceData(null)
             }
+          } else if (track.type === 'sequence' && track.adapter.getSequence) {
+            const txSpan = txEnd - txStart
+            if (txSpan <= 600) {
+              const seq = await fetchTranscriptSequence(track.adapter, txMapper, txStart, txEnd)
+              if (!cancelled) {
+                setSequenceData(seq)
+                setData(null)
+                setCoverageData(null)
+              }
+            } else {
+              if (!cancelled) {
+                setSequenceData('')
+                setData(null)
+                setCoverageData(null)
+              }
+            }
           } else {
-            // Other track types (sequence, variant, alignment) — hide in transcript view
+            // Other track types (variant, alignment) — hide in transcript view
             if (!cancelled) { setData(null); setCoverageData(null); setSequenceData(null); setLoading(false) }
             return
           }
@@ -175,11 +193,12 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
   const seqStrand = (track.settings.translationStrand as TranslationStrand) ?? 'forward'
   useEffect(() => {
     if (track.type !== 'sequence') return
-    const idealHeight = getSequenceTrackHeight(end - start, seqStrand)
+    const span = txActive ? txEnd - txStart : end - start
+    const idealHeight = getSequenceTrackHeight(span, seqStrand)
     if (idealHeight !== track.height) {
       updateTrack(track.id, { height: idealHeight })
     }
-  }, [track.type, track.id, track.height, start, end, seqStrand, updateTrack])
+  }, [track.type, track.id, track.height, start, end, seqStrand, updateTrack, txActive, txStart, txEnd])
 
   // Render to canvas
   const render = useCallback(() => {
@@ -349,12 +368,23 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
       if (clickBp >= feature.start && clickBp < feature.end) {
         let mapper: TranscriptCoordinateMapper | null = null
         let label = ''
+        let cds: { txStart: number; txEnd: number } | undefined
 
         if (feature.data.type === 'gene_model' && feature.data.transcripts.length > 0) {
           const transcript = feature.data.transcripts[0]
           mapper = TranscriptCoordinateMapper.fromTranscript(transcript, feature.chromosome)
           label = feature.data.geneName ?? feature.data.geneId
           if (transcript.id) label += ` · ${transcript.id}`
+
+          if (transcript.cds && transcript.cds.length > 0) {
+            const cdsGenomicStart = Math.min(...transcript.cds.map((c) => c.start))
+            const cdsGenomicEnd = Math.max(...transcript.cds.map((c) => c.end))
+            const txCdsStart = mapper.genomicToTranscript(cdsGenomicStart)
+            const txCdsEnd = mapper.genomicToTranscript(cdsGenomicEnd - 1)
+            if (txCdsStart !== null && txCdsEnd !== null) {
+              cds = { txStart: Math.min(txCdsStart, txCdsEnd), txEnd: Math.max(txCdsStart, txCdsEnd) + 1 }
+            }
+          }
         } else if (
           feature.data.type === 'annotation' &&
           feature.data.blockStarts &&
@@ -364,10 +394,19 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
         ) {
           mapper = TranscriptCoordinateMapper.fromBed12(feature)
           label = feature.data.name ?? feature.id
+
+          if (feature.data.thickStart !== undefined && feature.data.thickEnd !== undefined &&
+              feature.data.thickEnd > feature.data.thickStart) {
+            const txCdsStart = mapper.genomicToTranscript(feature.data.thickStart)
+            const txCdsEnd = mapper.genomicToTranscript(feature.data.thickEnd - 1)
+            if (txCdsStart !== null && txCdsEnd !== null) {
+              cds = { txStart: Math.min(txCdsStart, txCdsEnd), txEnd: Math.max(txCdsStart, txCdsEnd) + 1 }
+            }
+          }
         }
 
         if (mapper && mapper.txLength > 0) {
-          useTranscriptViewStore.getState().enter(mapper, feature.id, label)
+          useTranscriptViewStore.getState().enter(mapper, feature.id, label, cds)
         }
         break
       }
@@ -378,10 +417,22 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
 
   return (
     <div className="border-b border-border">
-      {/* Track header */}
-      <div className="flex items-center gap-2 px-3 py-1 bg-muted/50 text-xs">
-        {/* Drag handle + move up/down */}
-        <div className="flex items-center gap-0.5 cursor-grab active:cursor-grabbing" title="Drag to reorder">
+      {/* Track header — draggable for reorder */}
+      <div
+        className="flex items-center gap-2 px-3 py-1 bg-muted/50 text-xs cursor-grab active:cursor-grabbing"
+        draggable
+        onDragStart={(e) => {
+          const tag = (e.target as HTMLElement).tagName
+          if (tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT') {
+            e.preventDefault()
+            return
+          }
+          onDragHandleStart?.(e)
+        }}
+        onDragEnd={() => onDragHandleEnd?.()}
+      >
+        {/* Move up/down */}
+        <div className="flex items-center gap-0.5">
           <span className="text-muted-foreground text-[10px] leading-none select-none">⠿</span>
           <div className="flex flex-col -my-0.5">
             <button
@@ -506,6 +557,8 @@ export function TrackView({ track, index, totalTracks }: TrackViewProps) {
       <div
         ref={containerRef}
         className="w-full relative cursor-grab active:cursor-grabbing select-none"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

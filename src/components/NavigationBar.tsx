@@ -184,13 +184,7 @@ export function NavigationBar() {
           onChange={(e) => handleInputChange(e.target.value)}
           onFocus={() => {
             setInputFocused(true)
-            // Pre-fill with current coordinates so user can copy/select them
-            const current = txActive
-              ? `tx:${txStart}-${txEnd}`
-              : formatRegion(region)
-            setInputValue(current)
-            // Select all text after React re-renders with the new value
-            requestAnimationFrame(() => inputRef.current?.select())
+            setInputValue('')
           }}
           onBlur={() => {
             setInputFocused(false)

@@ -149,7 +149,15 @@ export function composeSvg(options: ComposerOptions): SVGSVGElement {
       highlightRect.setAttribute('y', '0')
       highlightRect.setAttribute('width', String(Math.min(dataWidth, hx2) - Math.max(0, hx1)))
       highlightRect.setAttribute('height', String(totalHeight))
-      highlightRect.setAttribute('fill', highlight.color)
+      // Parse 8-digit hex (#RRGGBBAA) into fill + fill-opacity for SVG compatibility
+      let fillColor = highlight.color
+      let fillOpacity = '1'
+      if (/^#[0-9a-fA-F]{8}$/.test(highlight.color)) {
+        fillColor = highlight.color.slice(0, 7)
+        fillOpacity = (parseInt(highlight.color.slice(7, 9), 16) / 255).toFixed(2)
+      }
+      highlightRect.setAttribute('fill', fillColor)
+      highlightRect.setAttribute('fill-opacity', fillOpacity)
       highlightRect.setAttribute('class', 'highlight-region')
       svg.appendChild(highlightRect)
     }
