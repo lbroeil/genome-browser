@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "genome-browser",
+  "productName": "Genome Browser",
   "version": "0.1.0",
-  "identifier": "com.genome-browser.app",
+  "identifier": "com.lbroeil.genome-browser",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5174",

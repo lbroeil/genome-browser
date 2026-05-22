@@ -601,12 +601,12 @@ export function TrackView({ track, index, totalTracks, onDragHandleStart, onDrag
         </button>
       </div>
 
-      {/* Canvas area */}
+      {/* Canvas area — onDragOver preventDefault allows drops to register on parent wrapper */}
       <div
         ref={containerRef}
         className="w-full relative cursor-grab active:cursor-grabbing select-none"
         draggable={false}
-        onDragStart={(e) => e.preventDefault()}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

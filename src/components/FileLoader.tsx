@@ -8,9 +8,7 @@ import { VcfAdapter } from '@/adapters/VcfAdapter'
 import { FastaAdapter } from '@/adapters/FastaAdapter'
 import { isTauri } from '@/adapters/TauriFile'
 import { TRACK_COLORS } from '@/utils/colors'
-import { normalizeChromosomeName } from '@/utils/coordinates'
-import { useSearchStore, type SearchableFeature } from '@/store/searchStore'
-import type { GenomicAdapter } from '@/adapters/types'
+import { indexAdapterForSearch } from '@/store/searchStore'
 
 async function autoDetectIndex(_dataPath: string, candidates: string[]): Promise<string | undefined> {
   const { invoke } = await import('@tauri-apps/api/core')
@@ -62,52 +60,6 @@ function getDefaultHeight(type: TrackType): number {
 
 let trackIdCounter = 0
 
-async function extractSearchableFeatures(adapter: GenomicAdapter, type: TrackType): Promise<SearchableFeature[]> {
-  if (type !== 'annotation' && type !== 'gene_model') return []
-
-  const refNames = await adapter.getRefNames()
-  const features: SearchableFeature[] = []
-
-  for (const chr of refNames) {
-    // Fetch all features for this chromosome
-    const chrFeatures = await adapter.getFeatures({
-      chromosome: chr,
-      start: 0,
-      end: Number.MAX_SAFE_INTEGER,
-    })
-
-    for (const f of chrFeatures) {
-      let name: string | undefined
-      if (f.data.type === 'gene_model') {
-        name = f.data.geneName ?? f.data.geneId
-        // Also index gene_id separately
-        if (f.data.geneName && f.data.geneId && f.data.geneName !== f.data.geneId) {
-          features.push({
-            name: f.data.geneId,
-            chromosome: normalizeChromosomeName(f.chromosome),
-            start: f.start,
-            end: f.end,
-            type: 'gene_id',
-          })
-        }
-      } else if (f.data.type === 'annotation') {
-        name = f.data.name
-      }
-
-      if (name) {
-        features.push({
-          name,
-          chromosome: normalizeChromosomeName(f.chromosome),
-          start: f.start,
-          end: f.end,
-          type: f.data.type === 'gene_model' ? 'gene' : 'annotation',
-        })
-      }
-    }
-  }
-
-  return features
-}
 
 export function FileLoader() {
   const [isDragOver, setIsDragOver] = useState(false)
@@ -118,8 +70,6 @@ export function FileLoader() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pendingBam = useRef<File | null>(null)
   const addTrack = useTrackStore((s) => s.addTrack)
-  const addSearchFeatures = useSearchStore((s) => s.addFeatures)
-
   const addTrackFromAdapter = useCallback(async (
     adapter: TrackConfig['adapter'],
     type: TrackType,
@@ -141,13 +91,8 @@ export function FileLoader() {
     }
     addTrack(track)
 
-    // Index features for search (in background, don't block)
-    if (type === 'annotation' || type === 'gene_model') {
-      extractSearchableFeatures(adapter, type).then((features) => {
-        if (features.length > 0) addSearchFeatures(features)
-      })
-    }
-  }, [addTrack, addSearchFeatures])
+    indexAdapterForSearch(adapter, type)
+  }, [addTrack])
 
   const loadFiles = useCallback(async (files: File[]) => {
     setLoading(true)

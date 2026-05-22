@@ -35,13 +35,14 @@ export function TrackPanel() {
   const handleDrop = useCallback((toIndex: number, e: React.DragEvent) => {
     e.preventDefault()
     dragCounterRef.current = 0
-    const fromIndex = dragIndex
+    const fromStr = e.dataTransfer.getData('text/plain')
+    const fromIndex = fromStr !== '' ? parseInt(fromStr, 10) : null
     setDragIndex(null)
     setDropIndex(null)
-    if (fromIndex !== null && fromIndex !== toIndex) {
+    if (fromIndex !== null && !isNaN(fromIndex) && fromIndex !== toIndex) {
       reorderTracks(fromIndex, toIndex)
     }
-  }, [dragIndex, reorderTracks])
+  }, [reorderTracks])
 
   const handleDragEnd = useCallback(() => {
     setDragIndex(null)

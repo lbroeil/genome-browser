@@ -1,5 +1,7 @@
 import { create } from 'zustand'
-import type { GenomicRegion } from '@/adapters/types'
+import type { GenomicAdapter, GenomicRegion } from '@/adapters/types'
+import type { TrackType } from '@/store/trackStore'
+import { normalizeChromosomeName } from '@/utils/coordinates'
 
 export interface SearchableFeature {
   name: string
@@ -72,3 +74,50 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     }
   },
 }))
+
+export async function indexAdapterForSearch(adapter: GenomicAdapter, type: TrackType): Promise<void> {
+  if (type !== 'annotation' && type !== 'gene_model') return
+
+  const refNames = await adapter.getRefNames()
+  const features: SearchableFeature[] = []
+
+  for (const chr of refNames) {
+    const chrFeatures = await adapter.getFeatures({
+      chromosome: chr,
+      start: 0,
+      end: Number.MAX_SAFE_INTEGER,
+    })
+
+    for (const f of chrFeatures) {
+      let name: string | undefined
+      if (f.data.type === 'gene_model') {
+        name = f.data.geneName ?? f.data.geneId
+        if (f.data.geneName && f.data.geneId && f.data.geneName !== f.data.geneId) {
+          features.push({
+            name: f.data.geneId,
+            chromosome: normalizeChromosomeName(f.chromosome),
+            start: f.start,
+            end: f.end,
+            type: 'gene_id',
+          })
+        }
+      } else if (f.data.type === 'annotation') {
+        name = f.data.name
+      }
+
+      if (name) {
+        features.push({
+          name,
+          chromosome: normalizeChromosomeName(f.chromosome),
+          start: f.start,
+          end: f.end,
+          type: f.data.type === 'gene_model' ? 'gene' : 'annotation',
+        })
+      }
+    }
+  }
+
+  if (features.length > 0) {
+    useSearchStore.getState().addFeatures(features)
+  }
+}

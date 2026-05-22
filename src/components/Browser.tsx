@@ -11,6 +11,7 @@ import { UcscSequenceAdapter } from '@/adapters/UcscSequenceAdapter'
 import { BookmarkPanel } from './BookmarkPanel'
 import { serializeSession, restoreSession, saveSessionToFile, loadSessionFromFile } from '@/utils/session'
 import { isTauri } from '@/adapters/TauriFile'
+import { indexAdapterForSearch, useSearchStore } from '@/store/searchStore'
 
 export function Browser() {
   const [showExport, setShowExport] = useState(false)
@@ -89,9 +90,11 @@ export function Browser() {
       }
 
       useGenomeStore.getState().setRegion(result.viewport)
+      useSearchStore.getState().clearFeatures()
 
       for (const track of result.tracks) {
         useTrackStore.getState().addTrack(track)
+        indexAdapterForSearch(track.adapter, track.type)
       }
 
       if (result.errors.length > 0) {
