@@ -24,19 +24,22 @@ const ORF_TRACK_ID = 'orf-list-track'
 const USER_STORAGE_KEY = 'curation_user'
 
 /**
- * Curation track order: ORFs under review on top, then gene-model / annotation
- * context, then P-site coverage, with the hg38 sequence at the bottom.
+ * Curation track order, top → bottom:
+ *   gene models / annotation context (all candidate ORFs)
+ *   → ORFs under review (the ORF of interest)
+ *   → hg38 sequence / translation
+ *   → P-site coverage.
  */
 function curationRank(t: TrackConfig): number {
-  if (t.id === ORF_TRACK_ID) return 0
+  if (t.id === ORF_TRACK_ID) return 2 // ORFs under review — below the broader context
   switch (t.type) {
-    case 'gene_model': return 1
-    case 'annotation': return 2
-    case 'variant': return 3
+    case 'gene_model': return 0
+    case 'annotation':
+    case 'variant': return 1          // context (all candidate ORFs, etc.)
+    case 'sequence': return 3         // hg38 sequence / translation
     case 'coverage':
-    case 'alignment': return 4
-    case 'sequence': return 5
-    default: return 3
+    case 'alignment': return 4        // P-site coverage
+    default: return 1
   }
 }
 
