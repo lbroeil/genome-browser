@@ -1,48 +1,26 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { NavigationBar } from './NavigationBar'
-import { GenomeRuler } from './GenomeRuler'
 import { FileLoader } from './FileLoader'
-import { TrackPanel } from './TrackPanel'
+import { GenomeView } from './GenomeView'
 import { ExportDialog } from './ExportDialog'
 import { useTrackStore } from '@/store/trackStore'
 import { useGenomeStore } from '@/store/genomeStore'
 import { useCrosshairStore } from '@/store/crosshairStore'
-import { UcscSequenceAdapter } from '@/adapters/UcscSequenceAdapter'
 import { BookmarkPanel } from './BookmarkPanel'
-import { serializeSession, restoreSession, saveSessionToFile, loadSessionFromFile } from '@/utils/session'
+import { serializeSession, restoreSession, applyRestoredSession, saveSessionToFile, loadSessionFromFile } from '@/utils/session'
 import { isTauri } from '@/adapters/TauriFile'
-import { indexAdapterForSearch, useSearchStore } from '@/store/searchStore'
+import { useEnsureSequenceTrack } from '@/hooks/useEnsureSequenceTrack'
 
 export function Browser() {
   const [showExport, setShowExport] = useState(false)
   const [sessionWarnings, setSessionWarnings] = useState<string[]>([])
   const tracks = useTrackStore((s) => s.tracks)
-  const addTrack = useTrackStore((s) => s.addTrack)
   const crosshairEnabled = useCrosshairStore((s) => s.enabled)
   const toggleCrosshair = useCrosshairStore((s) => s.toggle)
   const sessionInputRef = useRef<HTMLInputElement>(null)
 
   // Add built-in hg38 sequence + translation track on first mount
-  useEffect(() => {
-    if (useTrackStore.getState().tracks.some((t) => t.id === 'hg38-sequence')) return
-
-    const adapter = new UcscSequenceAdapter()
-    adapter.initialize().then(() => {
-      // Re-check after async init — React StrictMode runs effects twice,
-      // so both can pass the sync check before either finishes
-      if (useTrackStore.getState().tracks.some((t) => t.id === 'hg38-sequence')) return
-      addTrack({
-        id: 'hg38-sequence',
-        name: 'hg38 Sequence / Translation',
-        type: 'sequence',
-        adapter,
-        height: 160,
-        color: '#6366f1',
-        visible: true,
-        settings: {},
-      })
-    })
-  }, [addTrack])
+  useEnsureSequenceTrack()
 
   const handleSaveSession = useCallback(async () => {
     const { chromosome, start, end } = useGenomeStore.getState()
@@ -83,22 +61,10 @@ export function Browser() {
       if (!json) return
 
       const result = await restoreSession(json)
+      const errors = applyRestoredSession(result)
 
-      const store = useTrackStore.getState()
-      for (const t of store.tracks) {
-        store.removeTrack(t.id)
-      }
-
-      useGenomeStore.getState().setRegion(result.viewport)
-      useSearchStore.getState().clearFeatures()
-
-      for (const track of result.tracks) {
-        useTrackStore.getState().addTrack(track)
-        indexAdapterForSearch(track.adapter, track.type)
-      }
-
-      if (result.errors.length > 0) {
-        setSessionWarnings(result.errors)
+      if (errors.length > 0) {
+        setSessionWarnings(errors)
         setTimeout(() => setSessionWarnings([]), 8000)
       }
     } catch (err) {
@@ -178,17 +144,7 @@ export function Browser() {
 
       <NavigationBar />
       <FileLoader />
-      <div
-        className="flex flex-col flex-1 min-h-0"
-        onMouseMove={crosshairEnabled ? (e) => {
-          const rect = e.currentTarget.getBoundingClientRect()
-          useCrosshairStore.getState().setX(e.clientX - rect.left)
-        } : undefined}
-        onMouseLeave={crosshairEnabled ? () => useCrosshairStore.getState().setX(null) : undefined}
-      >
-        <GenomeRuler />
-        <TrackPanel />
-      </div>
+      <GenomeView />
 
       {showExport && <ExportDialog onClose={() => setShowExport(false)} />}
     </div>

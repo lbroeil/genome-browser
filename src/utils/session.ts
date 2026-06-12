@@ -7,7 +7,9 @@ import { VcfAdapter } from '@/adapters/VcfAdapter'
 import { FastaAdapter } from '@/adapters/FastaAdapter'
 import { UcscSequenceAdapter } from '@/adapters/UcscSequenceAdapter'
 import { isTauri } from '@/adapters/TauriFile'
-import type { TrackConfig, TrackType } from '@/store/trackStore'
+import { useTrackStore, type TrackConfig, type TrackType } from '@/store/trackStore'
+import { useGenomeStore } from '@/store/genomeStore'
+import { indexAdapterForSearch, useSearchStore } from '@/store/searchStore'
 import type { GenomicAdapter } from '@/adapters/types'
 
 const USER_SETTING_KEYS = [
@@ -223,6 +225,44 @@ export async function restoreSession(
   }
 
   return { viewport: session.viewport, tracks, errors }
+}
+
+/**
+ * Apply an already-restored session to the live stores: clear current
+ * tracks, set the viewport, then add each restored track and (re)build the
+ * search index. Centralizes the "replicate all file-load side effects"
+ * rule — every side effect of fresh file loading (notably search indexing)
+ * must also run on session restore. Returns any per-track restore errors.
+ */
+export function applyRestoredSession(result: {
+  viewport: SessionData['viewport']
+  tracks: TrackConfig[]
+  errors: string[]
+}): string[] {
+  const store = useTrackStore.getState()
+  for (const t of store.tracks) {
+    store.removeTrack(t.id)
+  }
+
+  useGenomeStore.getState().setRegion(result.viewport)
+  useSearchStore.getState().clearFeatures()
+
+  for (const track of result.tracks) {
+    useTrackStore.getState().addTrack(track)
+    indexAdapterForSearch(track.adapter, track.type)
+  }
+
+  return result.errors
+}
+
+/**
+ * Restore a session from an already-parsed session object (e.g. fetched as
+ * JSON from the backend) and apply it to the live stores. Returns per-track
+ * restore errors. Used by the curation view to load a project's base session.
+ */
+export async function restoreSessionFromObject(session: unknown): Promise<string[]> {
+  const result = await restoreSession(JSON.stringify(session))
+  return applyRestoredSession(result)
 }
 
 export async function saveSessionToFile(sessionJson: string): Promise<void> {
