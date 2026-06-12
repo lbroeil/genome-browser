@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useCuration } from './useCuration'
 import { navigate } from './router'
+import { NewProjectForm } from './NewProjectForm'
 import { api, type Project } from './api'
 
 export function ProjectPicker() {
@@ -10,10 +11,14 @@ export function ProjectPicker() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
+  const refresh = useCallback(() => {
+    api.listProjects().then(setProjects).catch((e) => setError(String(e)))
+  }, [])
+
   useEffect(() => {
     if (userId == null) return
-    api.listProjects().then(setProjects).catch((e) => setError(String(e)))
-  }, [userId])
+    refresh()
+  }, [userId, refresh])
 
   const handleLogin = async () => {
     if (!name.trim()) return
@@ -67,24 +72,36 @@ export function ProjectPicker() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-6">
-        {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
+      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        {error && <p className="text-xs text-red-600">{error}</p>}
+
+        <div className="max-w-2xl">
+          <NewProjectForm onCreated={refresh} />
+        </div>
+
         {projects.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No projects yet. Create one with the backend (POST /api/projects, or import_data.py).
-          </p>
+          <p className="text-sm text-muted-foreground">No projects yet — create one above.</p>
         ) : (
           <ul className="grid gap-3 max-w-2xl">
             {projects.map((p) => (
-              <li key={p.id}>
+              <li key={p.id} className="flex items-stretch gap-2">
                 <button
                   onClick={() => navigate(`/curate/${p.id}`)}
-                  className="w-full text-left p-4 rounded border border-border hover:bg-accent transition-colors">
+                  className="flex-1 text-left p-4 rounded border border-border hover:bg-accent transition-colors">
                   <div className="flex justify-between items-baseline">
                     <span className="font-medium">{p.name}</span>
                     <span className="text-xs text-muted-foreground">{p.orf_count} ORFs</span>
                   </div>
                   {p.description && <p className="text-xs text-muted-foreground mt-1">{p.description}</p>}
+                </button>
+                <button
+                  title="Delete project"
+                  onClick={async () => {
+                    if (!confirm(`Delete project "${p.name}" and all its votes?`)) return
+                    try { await api.deleteProject(p.id); refresh() } catch (e) { setError(String(e)) }
+                  }}
+                  className="px-3 rounded border border-border text-xs text-muted-foreground hover:bg-red-50 hover:text-red-600">
+                  ✕
                 </button>
               </li>
             ))}

@@ -88,6 +88,12 @@ export const api = {
 
   listProjects: () => req<Project[]>('/api/projects'),
 
+  createProject: (form: FormData) =>
+    req<Project>('/api/projects', { method: 'POST', body: form }),
+
+  deleteProject: (projectId: number) =>
+    req<unknown>(`/api/projects/${projectId}`, { method: 'DELETE' }),
+
   getProject: (projectId: number) => req<Project>(`/api/projects/${projectId}`),
 
   getBaseSession: (projectId: number) =>

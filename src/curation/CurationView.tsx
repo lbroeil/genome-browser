@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { NavigationBar } from '@/components/NavigationBar'
 import { GenomeView } from '@/components/GenomeView'
+import { FileLoader } from '@/components/FileLoader'
 import { useCuration } from './useCuration'
 import { CurationControls, type ViewMode } from './CurationControls'
 import { navigate } from './router'
@@ -28,6 +29,7 @@ export function CurationView({ projectId }: { projectId: number }) {
   } = useCuration()
   const [notes, setNotes] = useState('')
   const [viewMode, setViewMode] = useState<ViewMode>('whole')
+  const [showLoader, setShowLoader] = useState(false)
 
   // Require a user; otherwise bounce to the picker.
   useEffect(() => {
@@ -77,6 +79,9 @@ export function CurationView({ projectId }: { projectId: number }) {
           </h1>
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          <button onClick={() => setShowLoader((v) => !v)} className="hover:text-foreground">
+            {showLoader ? 'Hide add-tracks' : '＋ Add my tracks'}
+          </button>
           <button onClick={() => navigate(`/stats/${projectId}`)} className="hover:text-foreground">Stats</button>
           <span>{username}</span>
         </div>
@@ -172,6 +177,7 @@ export function CurationView({ projectId }: { projectId: number }) {
         {/* Right: live browser */}
         <main className="flex flex-col flex-1 min-h-0">
           <NavigationBar />
+          {showLoader && <FileLoader />}
           {current && <CurationControls orf={current} viewMode={viewMode} onViewChange={setViewMode} />}
           <GenomeView />
         </main>
