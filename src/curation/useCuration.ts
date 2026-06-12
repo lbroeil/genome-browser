@@ -1,9 +1,9 @@
 import { create } from 'zustand'
-import { useTrackStore } from '@/store/trackStore'
+import { useTrackStore, type TrackConfig } from '@/store/trackStore'
 import { restoreSessionFromObject } from '@/utils/session'
 import { ensureSequenceTrack } from '@/hooks/useEnsureSequenceTrack'
 import { OrfListAdapter } from './OrfListAdapter'
-import { viewWholeOrf, applyStrandVisibility } from './navigation'
+import { viewWholeOrf, applyStrandVisibility, applySequenceStrand } from './navigation'
 import { api, type Project, type CuratedOrf, type Decision } from './api'
 
 /**
@@ -22,6 +22,28 @@ function resolveSessionUrls(session: unknown): unknown {
 
 const ORF_TRACK_ID = 'orf-list-track'
 const USER_STORAGE_KEY = 'curation_user'
+
+/**
+ * Curation track order: ORFs under review on top, then gene-model / annotation
+ * context, then P-site coverage, with the hg38 sequence at the bottom.
+ */
+function curationRank(t: TrackConfig): number {
+  if (t.id === ORF_TRACK_ID) return 0
+  switch (t.type) {
+    case 'gene_model': return 1
+    case 'annotation': return 2
+    case 'variant': return 3
+    case 'coverage':
+    case 'alignment': return 4
+    case 'sequence': return 5
+    default: return 3
+  }
+}
+
+function orderCurationTracks(): void {
+  const ordered = [...useTrackStore.getState().tracks].sort((a, b) => curationRank(a) - curationRank(b))
+  useTrackStore.setState({ tracks: ordered })
+}
 
 interface StoredUser { id: number; username: string }
 
@@ -120,6 +142,9 @@ export const useCuration = create<CurationState>((set, get) => {
           settings: { displayMode: 'frame' },
         })
 
+        // 3. Enforce curation track order (ORF list on top, sequence at bottom).
+        orderCurationTracks()
+
         set({ project, orfs, loading: false })
         await get().loadNext()
       } catch (err) {
@@ -140,6 +165,7 @@ export const useCuration = create<CurationState>((set, get) => {
         })
         if (next.orf) {
           applyStrandVisibility(next.orf.strand, get().strandFilter)
+          applySequenceStrand(next.orf.strand)
           viewWholeOrf(next.orf)
         }
       } catch (err) {

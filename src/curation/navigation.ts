@@ -86,6 +86,20 @@ export function applyStrandVisibility(orfStrand: string | null | undefined, enab
   }
 }
 
+/**
+ * Point the hg38 sequence / translation track at the ORF's strand, so the
+ * 3-frame translation shown is the one the ORF is read in.
+ */
+export function applySequenceStrand(orfStrand: string | null | undefined): void {
+  const ts = useTrackStore.getState()
+  const seq = ts.tracks.find((t) => t.id === 'hg38-sequence')
+  if (!seq) return
+  const value = orfStrand === '-' ? 'reverse' : 'forward'
+  if (seq.settings.translationStrand !== value) {
+    ts.updateTrack('hg38-sequence', { settings: { ...seq.settings, translationStrand: value } })
+  }
+}
+
 export function zoomOut(): void {
   useGenomeStore.getState().zoom(1.6)
 }
