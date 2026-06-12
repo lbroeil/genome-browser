@@ -11,23 +11,67 @@ interface LayoutItem {
   row: number
   x: number
   width: number
+  groupId?: string
 }
 
 function layoutFeatures(features: GenomicFeature[], region: GenomicRegion, canvasWidth: number): LayoutItem[] {
   const items: LayoutItem[] = []
   const rowEnds: number[] = []
 
-  const sorted = [...features].sort((a, b) => a.start - b.start)
+  // Group annotation features by name (BED features with same name = same ORF)
+  const nameGroups = new Map<string, GenomicFeature[]>()
+  const ungrouped: GenomicFeature[] = []
 
+  for (const feature of features) {
+    const name = feature.data.type === 'annotation' ? feature.data.name : undefined
+    if (name) {
+      if (!nameGroups.has(name)) nameGroups.set(name, [])
+      nameGroups.get(name)!.push(feature)
+    } else {
+      ungrouped.push(feature)
+    }
+  }
+
+  // Single-feature "groups" go to ungrouped
+  const groups: { name: string; features: GenomicFeature[] }[] = []
+  for (const [name, feats] of nameGroups) {
+    if (feats.length === 1) {
+      ungrouped.push(feats[0])
+    } else {
+      groups.push({ name, features: feats.sort((a, b) => a.start - b.start) })
+    }
+  }
+
+  // Layout multi-feature groups first — all members share one row
+  for (const group of groups.sort((a, b) => a.features[0].start - b.features[0].start)) {
+    const groupStart = Math.min(...group.features.map((f) => f.start))
+    const groupEnd = Math.max(...group.features.map((f) => f.end))
+    const x = bpToPixel(groupStart, region, canvasWidth)
+    const xEnd = bpToPixel(groupEnd, region, canvasWidth)
+    const groupWidth = Math.max(1, xEnd - x)
+
+    let row = 0
+    while (row < rowEnds.length && rowEnds[row] > x - 2) row++
+    if (row >= rowEnds.length) rowEnds.push(0)
+    rowEnds[row] = x + groupWidth
+
+    for (const feature of group.features) {
+      const fx = bpToPixel(feature.start, region, canvasWidth)
+      const fxEnd = bpToPixel(feature.end, region, canvasWidth)
+      const fw = Math.max(1, fxEnd - fx)
+      items.push({ feature, row, x: fx, width: fw, groupId: group.name })
+    }
+  }
+
+  // Layout ungrouped features with standard packing
+  const sorted = [...ungrouped].sort((a, b) => a.start - b.start)
   for (const feature of sorted) {
     const x = bpToPixel(feature.start, region, canvasWidth)
     const xEnd = bpToPixel(feature.end, region, canvasWidth)
     const width = Math.max(1, xEnd - x)
 
     let row = 0
-    while (row < rowEnds.length && rowEnds[row] > x - 2) {
-      row++
-    }
+    while (row < rowEnds.length && rowEnds[row] > x - 2) row++
     if (row >= rowEnds.length) rowEnds.push(0)
     rowEnds[row] = x + width
 
@@ -81,7 +125,61 @@ export function renderAnnotationCanvas(
   const layout = layoutFeatures(renderFeatures, region, width)
   const rowLabelEnds: Record<number, number> = {}
 
-  for (const { feature, row, x, width: w } of layout) {
+  // Draw intron lines for named groups first (behind the blocks)
+  const groupSpans = new Map<string, { row: number; minX: number; maxX: number; strand?: '+' | '-'; color: string }>()
+  for (const item of layout) {
+    if (!item.groupId) continue
+    let color = defaultColor
+    if (useFrameColor) {
+      color = FRAME_COLORS[item.feature.start % 3]
+    } else if (item.feature.data.type === 'annotation' && item.feature.data.itemRgb) {
+      color = item.feature.data.itemRgb
+    } else if (item.feature.strand) {
+      color = item.feature.strand === '+' ? sc.forward : sc.reverse
+    }
+
+    const existing = groupSpans.get(item.groupId)
+    if (existing) {
+      existing.minX = Math.min(existing.minX, item.x)
+      existing.maxX = Math.max(existing.maxX, item.x + item.width)
+    } else {
+      groupSpans.set(item.groupId, {
+        row: item.row,
+        minX: item.x,
+        maxX: item.x + item.width,
+        strand: item.feature.strand as '+' | '-' | undefined,
+        color,
+      })
+    }
+  }
+
+  for (const [, span] of groupSpans) {
+    const y = span.row * (ROW_HEIGHT + ROW_GAP) + 4
+    if (y + FEATURE_HEIGHT > height) continue
+    const midY = y + FEATURE_HEIGHT / 2
+    ctx.strokeStyle = span.color
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(span.minX, midY)
+    ctx.lineTo(span.maxX, midY)
+    ctx.stroke()
+
+    // Strand arrows along the connecting line
+    const spanW = span.maxX - span.minX
+    if (spanW > 30 && span.strand) {
+      ctx.fillStyle = span.color
+      ctx.font = '8px sans-serif'
+      ctx.textAlign = 'center'
+      const arrowChar = span.strand === '+' ? '▸' : '◂'
+      const step = Math.max(20, spanW / 8)
+      for (let ax = span.minX + step; ax < span.maxX - 10; ax += step) {
+        ctx.fillText(arrowChar, ax, midY + 3)
+      }
+    }
+  }
+
+  // Draw features
+  for (const { feature, row, x, width: w, groupId } of layout) {
     const y = row * (ROW_HEIGHT + ROW_GAP) + 4
 
     if (y + FEATURE_HEIGHT > height) continue
@@ -101,7 +199,6 @@ export function renderAnnotationCanvas(
 
       const transcript = feature.data.transcripts[0]
       if (transcript) {
-        // Intron line spans the transcript extent (not gene extent) to avoid orphan lines
         const txX = bpToPixel(transcript.start, region, width)
         const txXEnd = bpToPixel(transcript.end, region, width)
         ctx.strokeStyle = color
@@ -149,7 +246,7 @@ export function renderAnnotationCanvas(
           ctx.fillStyle = color
           ctx.font = '8px sans-serif'
           ctx.textAlign = 'center'
-          const arrowChar = feature.strand === '+' ? '\u25B8' : '\u25C2'
+          const arrowChar = feature.strand === '+' ? '▸' : '◂'
           const step = Math.max(20, txW / 8)
           for (let ax = txX + step; ax < txXEnd - 10; ax += step) {
             ctx.fillText(arrowChar, ax, midY + 3)
@@ -161,7 +258,7 @@ export function renderAnnotationCanvas(
       ctx.fillStyle = color
       ctx.fillRect(x, y, w, FEATURE_HEIGHT)
 
-      if (w > 10 && feature.strand) {
+      if (w > 10 && feature.strand && !groupId) {
         ctx.fillStyle = '#ffffff'
         ctx.font = '8px sans-serif'
         ctx.textAlign = 'center'
@@ -169,7 +266,7 @@ export function renderAnnotationCanvas(
       }
     }
 
-    // Draw label (sticky: clamps to visible area when feature extends off-screen left)
+    // Draw label
     let label: string | undefined
     if (feature.data.type === 'gene_model') {
       const geneName = feature.data.geneName ?? feature.data.geneId
@@ -185,7 +282,17 @@ export function renderAnnotationCanvas(
         }
       }
     } else if (feature.data.type === 'annotation') {
-      label = feature.data.name
+      // For grouped features, only label the first one (leftmost)
+      if (groupId) {
+        const span = groupSpans.get(groupId)
+        if (span && Math.abs(x - span.minX) > 1) {
+          label = undefined
+        } else {
+          label = feature.data.name
+        }
+      } else {
+        label = feature.data.name
+      }
     }
 
     if (label) {
@@ -194,7 +301,6 @@ export function renderAnnotationCanvas(
       ctx.textAlign = 'left'
       const labelX = Math.max(x + 1, 2)
       const labelWidth = ctx.measureText(label).width
-      // Skip label if it would overlap a previously drawn label on this row
       if (!rowLabelEnds[row] || labelX >= rowLabelEnds[row]) {
         ctx.fillText(label, labelX, y + FEATURE_HEIGHT + 12)
         rowLabelEnds[row] = labelX + labelWidth + 6

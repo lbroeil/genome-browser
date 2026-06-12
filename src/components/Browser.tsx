@@ -107,6 +107,16 @@ export function Browser() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!isTauri()) return
+    const unlisteners: (() => void)[] = []
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen('menu-save-session', () => handleSaveSession()).then((fn) => unlisteners.push(fn))
+      listen('menu-load-session', () => handleLoadSession()).then((fn) => unlisteners.push(fn))
+    })
+    return () => unlisteners.forEach((fn) => fn())
+  }, [handleSaveSession, handleLoadSession])
+
   return (
     <div className="flex flex-col h-screen">
       {/* Header */}

@@ -1,5 +1,6 @@
 import { TauriFile, isFilePath } from './TauriFile'
 import type { GenomicAdapter, AdapterMetadata, GenomicRegion, GenomicFeature, AnnotationData } from './types'
+import { decodeTextMaybeGzipped } from '@/utils/gzip'
 
 export class BedAdapter implements GenomicAdapter {
   private features: GenomicFeature[] = []
@@ -24,12 +25,14 @@ export class BedAdapter implements GenomicAdapter {
     if (this.filePath) {
       const handle = new TauriFile(this.filePath)
       const bytes = await handle.readFile()
-      text = new TextDecoder().decode(bytes)
+      text = await decodeTextMaybeGzipped(bytes)
     } else if (this.fileHandle) {
-      text = await this.fileHandle.text()
+      const bytes = new Uint8Array(await this.fileHandle.arrayBuffer())
+      text = await decodeTextMaybeGzipped(bytes)
     } else if (this.url) {
       const response = await fetch(this.url)
-      text = await response.text()
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      text = await decodeTextMaybeGzipped(bytes)
     } else {
       throw new Error('No file source')
     }

@@ -1,6 +1,7 @@
 import type { GenomicAdapter, CoverageBin, GenomicFeature } from '@/adapters/types'
 import type { TranscriptCoordinateMapper } from './TranscriptCoordinateMapper'
 import { reverseComplement } from './translation'
+import { mapChromosomeName } from './coordinates'
 
 /**
  * Fetch coverage data from an adapter and remap it to transcript coordinates
@@ -18,13 +19,17 @@ export async function fetchTranscriptCoverage(
   const genomicRegions = mapper.getGenomicRegionsForTranscriptRange(txStart, txEnd)
   if (genomicRegions.length === 0) return []
 
+  const refNames = await adapter.getRefNames()
   const allBins: CoverageBin[] = []
 
   for (const region of genomicRegions) {
+    const mappedChr = mapChromosomeName(region.chromosome, refNames)
+    if (!mappedChr) continue
+    const queryRegion = { ...region, chromosome: mappedChr }
     const regionBp = region.end - region.start
     // Allocate bins proportionally to the region's share of the transcript viewport
     const regionBins = Math.max(1, Math.round(pixelWidth * (regionBp / (txEnd - txStart))))
-    const bins = await adapter.getCoverage(region, regionBins)
+    const bins = await adapter.getCoverage(queryRegion, regionBins)
 
     for (const bin of bins) {
       const txPos = mapper.genomicToTranscript(bin.start)
@@ -73,9 +78,12 @@ export async function fetchTranscriptSequence(
   const genomicRegions = mapper.getGenomicRegionsForTranscriptRange(txStart, txEnd)
   if (genomicRegions.length === 0) return ''
 
+  const refNames = await adapter.getRefNames()
   const segments: string[] = []
   for (const region of genomicRegions) {
-    const seq = await adapter.getSequence(region)
+    const mappedChr = mapChromosomeName(region.chromosome, refNames)
+    if (!mappedChr) continue
+    const seq = await adapter.getSequence({ ...region, chromosome: mappedChr })
     segments.push(seq)
   }
 

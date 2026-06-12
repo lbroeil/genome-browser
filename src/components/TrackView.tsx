@@ -19,11 +19,10 @@ interface TrackViewProps {
   track: TrackConfig
   index: number
   totalTracks: number
-  onDragHandleStart?: (e: React.DragEvent) => void
-  onDragHandleEnd?: () => void
+  onDragHandleDown?: (e: React.MouseEvent) => void
 }
 
-export function TrackView({ track, index, totalTracks, onDragHandleStart, onDragHandleEnd }: TrackViewProps) {
+export function TrackView({ track, index, totalTracks, onDragHandleDown }: TrackViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const { chromosome, start, end, pan, zoom, setRegion } = useGenomeStore()
@@ -465,23 +464,15 @@ export function TrackView({ track, index, totalTracks, onDragHandleStart, onDrag
 
   return (
     <div className="border-b border-border">
-      {/* Track header — draggable for reorder */}
-      <div
-        className="flex items-center gap-2 px-3 py-1 bg-muted/50 text-xs cursor-grab active:cursor-grabbing"
-        draggable
-        onDragStart={(e) => {
-          const tag = (e.target as HTMLElement).tagName
-          if (tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT') {
-            e.preventDefault()
-            return
-          }
-          onDragHandleStart?.(e)
-        }}
-        onDragEnd={() => onDragHandleEnd?.()}
-      >
-        {/* Move up/down */}
+      {/* Track header */}
+      <div className="flex items-center gap-2 px-3 py-1 bg-muted/50 text-xs">
+        {/* Drag handle + move up/down */}
         <div className="flex items-center gap-0.5">
-          <span className="text-muted-foreground text-[10px] leading-none select-none">⠿</span>
+          <span
+            className="text-muted-foreground hover:text-foreground text-sm leading-none select-none cursor-grab active:cursor-grabbing px-0.5"
+            onMouseDown={(e) => onDragHandleDown?.(e)}
+            title="Drag to reorder"
+          >⠿</span>
           <div className="flex flex-col -my-0.5">
             <button
               onClick={() => reorderTracks(index, index - 1)}
@@ -601,12 +592,10 @@ export function TrackView({ track, index, totalTracks, onDragHandleStart, onDrag
         </button>
       </div>
 
-      {/* Canvas area — onDragOver preventDefault allows drops to register on parent wrapper */}
+      {/* Canvas area */}
       <div
         ref={containerRef}
         className="w-full relative cursor-grab active:cursor-grabbing select-none"
-        draggable={false}
-        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

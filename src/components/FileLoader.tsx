@@ -9,6 +9,7 @@ import { FastaAdapter } from '@/adapters/FastaAdapter'
 import { isTauri } from '@/adapters/TauriFile'
 import { TRACK_COLORS } from '@/utils/colors'
 import { indexAdapterForSearch } from '@/store/searchStore'
+import { DisplayModePicker, type PendingDisplayTrack } from './DisplayModePicker'
 
 async function autoDetectIndex(_dataPath: string, candidates: string[]): Promise<string | undefined> {
   const { invoke } = await import('@tauri-apps/api/core')
@@ -61,26 +62,31 @@ function getDefaultHeight(type: TrackType): number {
 let trackIdCounter = 0
 
 
+const DISPLAY_MODE_TYPES: TrackType[] = ['coverage', 'annotation', 'gene_model']
+
 export function FileLoader() {
   const [isDragOver, setIsDragOver] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [urlInput, setUrlInput] = useState('')
   const [showUrlInput, setShowUrlInput] = useState(false)
+  const [pendingDisplayTracks, setPendingDisplayTracks] = useState<PendingDisplayTrack[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pendingBam = useRef<File | null>(null)
   const addTrack = useTrackStore((s) => s.addTrack)
+  const updateTrack = useTrackStore((s) => s.updateTrack)
   const addTrackFromAdapter = useCallback(async (
     adapter: TrackConfig['adapter'],
     type: TrackType,
     name: string,
     source?: Record<string, string>,
   ) => {
+    const id = `track-${++trackIdCounter}`
     const settings: Record<string, unknown> = {}
     if (source) settings.source = source
 
     const track: TrackConfig = {
-      id: `track-${++trackIdCounter}`,
+      id,
       name,
       type,
       adapter,
@@ -92,6 +98,10 @@ export function FileLoader() {
     addTrack(track)
 
     indexAdapterForSearch(adapter, type)
+
+    if (DISPLAY_MODE_TYPES.includes(type)) {
+      setPendingDisplayTracks((prev) => [...prev, { id, name, type }])
+    }
   }, [addTrack])
 
   const loadFiles = useCallback(async (files: File[]) => {
@@ -436,6 +446,25 @@ export function FileLoader() {
     return () => { unlisten?.() }
   }, [loadFilePaths])
 
+  useEffect(() => {
+    if (!isTauri()) return
+    let unlisten: (() => void) | undefined
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen('menu-open-file', () => handleOpenClick()).then((fn) => { unlisten = fn })
+    })
+    return () => { unlisten?.() }
+  }, [handleOpenClick])
+
+  const handleDisplayModeDone = useCallback((modes: Record<string, string>) => {
+    for (const [id, mode] of Object.entries(modes)) {
+      const track = useTrackStore.getState().tracks.find((t) => t.id === id)
+      if (track) {
+        updateTrack(id, { settings: { ...track.settings, displayMode: mode } })
+      }
+    }
+    setPendingDisplayTracks([])
+  }, [updateTrack])
+
   return (
     <div className="px-4 py-2 border-b border-border">
       <div
@@ -497,6 +526,10 @@ export function FileLoader() {
 
       {error && (
         <p className="text-xs text-destructive mt-1">{error}</p>
+      )}
+
+      {pendingDisplayTracks.length > 0 && (
+        <DisplayModePicker tracks={pendingDisplayTracks} onDone={handleDisplayModeDone} />
       )}
     </div>
   )

@@ -11,6 +11,7 @@ interface LayoutItem {
   row: number
   x: number
   width: number
+  groupId?: string
 }
 
 /** Clamp a rect to [0, viewportWidth]. Returns null if entirely outside. */
@@ -31,8 +32,51 @@ function clampLine(x1: number, x2: number, viewportWidth: number): { x1: number;
 function layoutFeatures(features: GenomicFeature[], region: GenomicRegion, canvasWidth: number): LayoutItem[] {
   const items: LayoutItem[] = []
   const rowEnds: number[] = []
-  const sorted = [...features].sort((a, b) => a.start - b.start)
 
+  // Group annotation features by name
+  const nameGroups = new Map<string, GenomicFeature[]>()
+  const ungrouped: GenomicFeature[] = []
+
+  for (const feature of features) {
+    const name = feature.data.type === 'annotation' ? feature.data.name : undefined
+    if (name) {
+      if (!nameGroups.has(name)) nameGroups.set(name, [])
+      nameGroups.get(name)!.push(feature)
+    } else {
+      ungrouped.push(feature)
+    }
+  }
+
+  const groups: { name: string; features: GenomicFeature[] }[] = []
+  for (const [name, feats] of nameGroups) {
+    if (feats.length === 1) {
+      ungrouped.push(feats[0])
+    } else {
+      groups.push({ name, features: feats.sort((a, b) => a.start - b.start) })
+    }
+  }
+
+  for (const group of groups.sort((a, b) => a.features[0].start - b.features[0].start)) {
+    const groupStart = Math.min(...group.features.map((f) => f.start))
+    const groupEnd = Math.max(...group.features.map((f) => f.end))
+    const x = bpToPixel(groupStart, region, canvasWidth)
+    const xEnd = bpToPixel(groupEnd, region, canvasWidth)
+    const groupWidth = Math.max(1, xEnd - x)
+
+    let row = 0
+    while (row < rowEnds.length && rowEnds[row] > x - 2) row++
+    if (row >= rowEnds.length) rowEnds.push(0)
+    rowEnds[row] = x + groupWidth
+
+    for (const feature of group.features) {
+      const fx = bpToPixel(feature.start, region, canvasWidth)
+      const fxEnd = bpToPixel(feature.end, region, canvasWidth)
+      const fw = Math.max(1, fxEnd - fx)
+      items.push({ feature, row, x: fx, width: fw, groupId: group.name })
+    }
+  }
+
+  const sorted = [...ungrouped].sort((a, b) => a.start - b.start)
   for (const feature of sorted) {
     const x = bpToPixel(feature.start, region, canvasWidth)
     const xEnd = bpToPixel(feature.end, region, canvasWidth)
@@ -108,7 +152,45 @@ export function renderAnnotationSvg(
   labelsGroup.setAttribute('class', 'labels')
   const rowLabelEnds: Record<number, number> = {}
 
-  for (const { feature, row, x, width: w } of layout) {
+  // Draw intron lines for named BED groups
+  const groupSpans = new Map<string, { row: number; minX: number; maxX: number; strand?: '+' | '-'; color: string }>()
+  for (const item of layout) {
+    if (!item.groupId) continue
+    const sc2 = strandColors ?? STRAND_COLORS
+    let c = defaultColor
+    if (displayMode === 'frame') c = FRAME_COLORS[item.feature.start % 3]
+    else if (item.feature.data.type === 'annotation' && item.feature.data.itemRgb) c = item.feature.data.itemRgb
+    else if (item.feature.strand) c = item.feature.strand === '+' ? sc2.forward : sc2.reverse
+
+    const existing = groupSpans.get(item.groupId)
+    if (existing) {
+      existing.minX = Math.min(existing.minX, item.x)
+      existing.maxX = Math.max(existing.maxX, item.x + item.width)
+    } else {
+      groupSpans.set(item.groupId, { row: item.row, minX: item.x, maxX: item.x + item.width, strand: item.feature.strand as '+' | '-' | undefined, color: c })
+    }
+  }
+
+  for (const [, span] of groupSpans) {
+    const y = span.row * (ROW_HEIGHT + ROW_GAP) + 4
+    if (y + FEATURE_HEIGHT > height) continue
+    const midY = y + FEATURE_HEIGHT / 2
+    const clamped = clampLine(span.minX, span.maxX, width)
+    if (clamped) {
+      const targetG = span.strand === '+' ? forwardGroup : span.strand === '-' ? reverseGroup : unknownGroup
+      const line = document.createElementNS(ns, 'line')
+      line.setAttribute('x1', clamped.x1.toFixed(1))
+      line.setAttribute('y1', String(midY))
+      line.setAttribute('x2', clamped.x2.toFixed(1))
+      line.setAttribute('y2', String(midY))
+      line.setAttribute('stroke', span.color)
+      line.setAttribute('stroke-width', '1')
+      line.setAttribute('class', 'group-intron')
+      targetG.appendChild(line)
+    }
+  }
+
+  for (const { feature, row, x, width: w, groupId } of layout) {
     const y = row * (ROW_HEIGHT + ROW_GAP) + 4
     if (y + FEATURE_HEIGHT > height) continue
 
@@ -285,8 +367,13 @@ export function renderAnnotationSvg(
         targetGroup.appendChild(rect)
       }
 
-      // Label
-      if (feature.data.type === 'annotation' && feature.data.name) {
+      // Label (for grouped features, only label the leftmost block)
+      let showLabel = true
+      if (groupId) {
+        const span = groupSpans.get(groupId)
+        if (span && Math.abs(x - span.minX) > 1) showLabel = false
+      }
+      if (showLabel && feature.data.type === 'annotation' && feature.data.name) {
         const labelX = Math.max(Math.min(x + 1, width - 10), 2)
         const estWidth = feature.data.name.length * 6
         if (!rowLabelEnds[row] || labelX >= rowLabelEnds[row]) {
