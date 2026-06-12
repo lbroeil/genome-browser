@@ -1,5 +1,6 @@
 import { useGenomeStore } from '@/store/genomeStore'
 import { useTranscriptViewStore } from '@/store/transcriptViewStore'
+import { useTrackStore } from '@/store/trackStore'
 import { TranscriptCoordinateMapper } from '@/utils/TranscriptCoordinateMapper'
 import { orfToFeature } from './OrfListAdapter'
 import type { CuratedOrf } from './api'
@@ -67,6 +68,22 @@ export function enterTranscriptView(orf: CuratedOrf): void {
   }
 
   useTranscriptViewStore.getState().enter(mapper, feature.id, orf.name, cds)
+}
+
+/**
+ * Show only the strand-appropriate P-site tracks for an ORF. Tracks tagged with
+ * `settings.strand` ('+'/'-') are hidden when they don't match the ORF's strand;
+ * untagged tracks (sequence, annotations, ORF list, curator uploads) are untouched.
+ * When `enabled` is false, all strand-tagged tracks are shown.
+ */
+export function applyStrandVisibility(orfStrand: string | null | undefined, enabled: boolean): void {
+  const ts = useTrackStore.getState()
+  for (const t of ts.tracks) {
+    const trackStrand = t.settings.strand as string | undefined
+    if (!trackStrand) continue
+    const visible = !enabled || !orfStrand || trackStrand === orfStrand
+    if (t.visible !== visible) ts.updateTrack(t.id, { visible })
+  }
 }
 
 export function zoomOut(): void {

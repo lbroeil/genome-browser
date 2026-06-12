@@ -3,8 +3,22 @@ import { useTrackStore } from '@/store/trackStore'
 import { restoreSessionFromObject } from '@/utils/session'
 import { ensureSequenceTrack } from '@/hooks/useEnsureSequenceTrack'
 import { OrfListAdapter } from './OrfListAdapter'
-import { viewWholeOrf } from './navigation'
+import { viewWholeOrf, applyStrandVisibility } from './navigation'
 import { api, type Project, type CuratedOrf, type Decision } from './api'
+
+/**
+ * Resolve relative track URLs ("/data/x.bw") in a base session against the API
+ * base, so the same session works in dev (cross-origin) and prod (same-origin).
+ */
+function resolveSessionUrls(session: unknown): unknown {
+  if (!session || typeof session !== 'object') return session
+  const s = JSON.parse(JSON.stringify(session)) as { tracks?: Array<{ source?: Record<string, string> }> }
+  for (const t of s.tracks ?? []) {
+    const src = t.source
+    if (src?.url && src.url.startsWith('/')) src.url = `${api.apiBase}${src.url}`
+  }
+  return s
+}
 
 const ORF_TRACK_ID = 'orf-list-track'
 const USER_STORAGE_KEY = 'curation_user'
@@ -34,12 +48,14 @@ interface CurationState {
   loading: boolean
   error: string | null
   lastDecision: Decision | null
+  strandFilter: boolean
 
   setUser: (username: string) => Promise<void>
   logout: () => void
   loadProject: (projectId: number) => Promise<void>
   loadNext: () => Promise<void>
   vote: (decision: Decision, notes: string | undefined, regionViewed: string | undefined) => Promise<void>
+  setStrandFilter: (on: boolean) => void
 }
 
 export const useCuration = create<CurationState>((set, get) => {
@@ -58,6 +74,7 @@ export const useCuration = create<CurationState>((set, get) => {
     loading: false,
     error: null,
     lastDecision: null,
+    strandFilter: true,
 
     setUser: async (username: string) => {
       const user = await api.createOrGetUser(username.trim())
@@ -83,7 +100,7 @@ export const useCuration = create<CurationState>((set, get) => {
         //    if one is set. Then ensure the hg38 sequence track is present.
         if (baseSession && Array.isArray((baseSession as { tracks?: unknown[] }).tracks) &&
             (baseSession as { tracks: unknown[] }).tracks.length > 0) {
-          await restoreSessionFromObject(baseSession)
+          await restoreSessionFromObject(resolveSessionUrls(baseSession))
         }
         await ensureSequenceTrack()
 
@@ -121,7 +138,10 @@ export const useCuration = create<CurationState>((set, get) => {
           progressTotal: next.progress_total,
           done: next.done,
         })
-        if (next.orf) viewWholeOrf(next.orf)
+        if (next.orf) {
+          applyStrandVisibility(next.orf.strand, get().strandFilter)
+          viewWholeOrf(next.orf)
+        }
       } catch (err) {
         set({ error: err instanceof Error ? err.message : String(err) })
       }
@@ -143,6 +163,11 @@ export const useCuration = create<CurationState>((set, get) => {
       } catch (err) {
         set({ error: err instanceof Error ? err.message : String(err) })
       }
+    },
+
+    setStrandFilter: (on: boolean) => {
+      set({ strandFilter: on })
+      applyStrandVisibility(get().current?.strand ?? null, on)
     },
   }
 })

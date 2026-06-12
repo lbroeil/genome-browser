@@ -17,6 +17,7 @@ const USER_SETTING_KEYS = [
   'forwardColor',
   'reverseColor',
   'translationStrand',
+  'strand', // P-site coverage strand tag, used for strand-aware curation visibility
 ]
 
 interface SessionTrack {

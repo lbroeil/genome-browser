@@ -2,6 +2,7 @@ import {
   viewWholeOrf, viewStartCodon, viewStopCodon, enterTranscriptView,
   hasSplicedStructure, zoomIn, zoomOut,
 } from './navigation'
+import { useCuration } from './useCuration'
 import type { CuratedOrf } from './api'
 
 export type ViewMode = 'whole' | 'start' | 'stop' | 'transcript'
@@ -18,6 +19,8 @@ export function CurationControls({
   onViewChange: (mode: ViewMode) => void
 }) {
   const spliced = hasSplicedStructure(orf)
+  const strandFilter = useCuration((s) => s.strandFilter)
+  const setStrandFilter = useCuration((s) => s.setStrandFilter)
 
   return (
     <div className="flex items-center gap-2 px-4 py-1.5 border-b border-border bg-card/50 text-xs">
@@ -43,6 +46,12 @@ export function CurationControls({
       </button>
 
       <div className="flex-1" />
+
+      <label className="flex items-center gap-1.5 mr-1 text-muted-foreground cursor-pointer select-none"
+        title="Show only the P-site tracks matching this ORF's strand">
+        <input type="checkbox" checked={strandFilter} onChange={(e) => setStrandFilter(e.target.checked)} />
+        Strand filter {orf.strand ? `(${orf.strand})` : ''}
+      </label>
 
       <button className={`${btn} ${idle}`} onClick={() => zoomOut()} title="Zoom out">−</button>
       <button className={`${btn} ${idle}`} onClick={() => zoomIn()} title="Zoom in">+</button>
