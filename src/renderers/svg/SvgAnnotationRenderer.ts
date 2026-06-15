@@ -1,6 +1,6 @@
 import type { GenomicFeature, GenomicRegion } from '@/adapters/types'
 import { bpToPixel } from '@/utils/coordinates'
-import { STRAND_COLORS, FRAME_COLORS } from '@/utils/colors'
+import { STRAND_COLORS, FRAME_COLORS, darken } from '@/utils/colors'
 
 const ROW_HEIGHT = 26
 const ROW_GAP = 2
@@ -264,6 +264,21 @@ export function renderAnnotationSvg(
       // Exons / CDS — clamped to viewport
       for (const exon of transcript.exons) {
         if (transcript.cds && transcript.cds.length > 0) {
+          // Non-CDS exon (UTR) portion at half height; CDS darker + full height
+          // so the annotated coding region stands out for overlap comparison.
+          const exX = bpToPixel(exon.start, region, width)
+          const exW = Math.max(1, bpToPixel(exon.end, region, width) - exX)
+          const exClamped = clampRect(exX, exW, width)
+          if (exClamped) {
+            const rect = document.createElementNS(ns, 'rect')
+            rect.setAttribute('x', exClamped.x.toFixed(1))
+            rect.setAttribute('y', String(y + FEATURE_HEIGHT * 0.25))
+            rect.setAttribute('width', exClamped.w.toFixed(1))
+            rect.setAttribute('height', String(FEATURE_HEIGHT * 0.5))
+            rect.setAttribute('fill', color)
+            rect.setAttribute('class', 'exon')
+            geneG.appendChild(rect)
+          }
           for (const cds of transcript.cds) {
             const cdsOverlapStart = Math.max(exon.start, cds.start)
             const cdsOverlapEnd = Math.min(exon.end, cds.end)
@@ -277,7 +292,7 @@ export function renderAnnotationSvg(
                 rect.setAttribute('y', String(y))
                 rect.setAttribute('width', clamped.w.toFixed(1))
                 rect.setAttribute('height', String(FEATURE_HEIGHT))
-                rect.setAttribute('fill', color)
+                rect.setAttribute('fill', darken(color, 0.3))
                 rect.setAttribute('class', 'cds')
                 geneG.appendChild(rect)
               }
@@ -351,20 +366,76 @@ export function renderAnnotationSvg(
         }
       }
     } else {
-      // Simple annotation — clamped to viewport
-      const clamped = clampRect(x, w, width)
-      if (clamped) {
-        const rect = document.createElementNS(ns, 'rect')
-        rect.setAttribute('x', clamped.x.toFixed(1))
-        rect.setAttribute('y', String(y))
-        rect.setAttribute('width', clamped.w.toFixed(1))
-        rect.setAttribute('height', String(FEATURE_HEIGHT))
-        rect.setAttribute('fill', color)
-        rect.setAttribute('class', 'feature')
-        if (feature.data.type === 'annotation' && feature.data.name) {
-          rect.setAttribute('data-name', feature.data.name)
+      const ann = feature.data.type === 'annotation' ? feature.data : undefined
+      const blockSizes = ann?.blockSizes
+      const blockStarts = ann?.blockStarts
+
+      if (blockSizes && blockStarts && blockSizes.length > 1 && blockStarts.length === blockSizes.length) {
+        // Spliced annotation (BED12): exon blocks joined by an intron line, with
+        // the thick (CDS) portion full height and thin (UTR) halved.
+        const midY = y + FEATURE_HEIGHT / 2
+        const clampedIntron = clampLine(x, x + w, width)
+        if (clampedIntron) {
+          const intronLine = document.createElementNS(ns, 'line')
+          intronLine.setAttribute('x1', clampedIntron.x1.toFixed(1))
+          intronLine.setAttribute('y1', String(midY))
+          intronLine.setAttribute('x2', clampedIntron.x2.toFixed(1))
+          intronLine.setAttribute('y2', String(midY))
+          intronLine.setAttribute('stroke', color)
+          intronLine.setAttribute('stroke-width', '1')
+          intronLine.setAttribute('class', 'intron')
+          targetGroup.appendChild(intronLine)
         }
-        targetGroup.appendChild(rect)
+
+        const thickStart = ann?.thickStart
+        const thickEnd = ann?.thickEnd
+        const hasThick = thickStart != null && thickEnd != null && thickEnd > thickStart
+
+        const drawSeg = (segStart: number, segEnd: number, h: number) => {
+          if (segEnd <= segStart) return
+          const sx = bpToPixel(segStart, region, width)
+          const sw = Math.max(1, bpToPixel(segEnd, region, width) - sx)
+          const clamped = clampRect(sx, sw, width)
+          if (!clamped) return
+          const rect = document.createElementNS(ns, 'rect')
+          rect.setAttribute('x', clamped.x.toFixed(1))
+          rect.setAttribute('y', String(y + (FEATURE_HEIGHT - h) / 2))
+          rect.setAttribute('width', clamped.w.toFixed(1))
+          rect.setAttribute('height', String(h))
+          rect.setAttribute('fill', color)
+          rect.setAttribute('class', 'feature')
+          if (ann?.name) rect.setAttribute('data-name', ann.name)
+          targetGroup.appendChild(rect)
+        }
+
+        const n = Math.min(blockSizes.length, blockStarts.length)
+        for (let i = 0; i < n; i++) {
+          const bStart = feature.start + blockStarts[i]
+          const bEnd = bStart + blockSizes[i]
+          if (hasThick) {
+            drawSeg(bStart, Math.min(bEnd, thickStart!), FEATURE_HEIGHT * 0.5)
+            drawSeg(Math.max(bStart, thickStart!), Math.min(bEnd, thickEnd!), FEATURE_HEIGHT)
+            drawSeg(Math.max(bStart, thickEnd!), bEnd, FEATURE_HEIGHT * 0.5)
+          } else {
+            drawSeg(bStart, bEnd, FEATURE_HEIGHT)
+          }
+        }
+      } else {
+        // Single-block annotation — clamped to viewport
+        const clamped = clampRect(x, w, width)
+        if (clamped) {
+          const rect = document.createElementNS(ns, 'rect')
+          rect.setAttribute('x', clamped.x.toFixed(1))
+          rect.setAttribute('y', String(y))
+          rect.setAttribute('width', clamped.w.toFixed(1))
+          rect.setAttribute('height', String(FEATURE_HEIGHT))
+          rect.setAttribute('fill', color)
+          rect.setAttribute('class', 'feature')
+          if (feature.data.type === 'annotation' && feature.data.name) {
+            rect.setAttribute('data-name', feature.data.name)
+          }
+          targetGroup.appendChild(rect)
+        }
       }
 
       // Label (for grouped features, only label the leftmost block)

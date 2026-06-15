@@ -49,3 +49,15 @@ export const COLORBLIND_SAFE = [
 export function qualityToOpacity(quality: number, maxQuality = 60): number {
   return Math.max(0.2, Math.min(1, quality / maxQuality))
 }
+
+/** Darken a #rrggbb hex color by `amount` (0–1). Used to set CDS apart from UTR. */
+export function darken(hex: string, amount = 0.3): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return hex
+  const n = parseInt(m[1], 16)
+  const f = Math.max(0, Math.min(1, 1 - amount))
+  const r = Math.round(((n >> 16) & 0xff) * f)
+  const g = Math.round(((n >> 8) & 0xff) * f)
+  const b = Math.round((n & 0xff) * f)
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`
+}

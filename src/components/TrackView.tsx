@@ -188,8 +188,13 @@ export function TrackView({ track, index, totalTracks, onDragHandleDown }: Track
     return () => { cancelled = true }
   }, [chromosome, start, end, track.adapter, track.type, track.settings, txActive, txMapper, txStart, txEnd])
 
-  // Auto-resize sequence track based on zoom level and strand setting
-  const seqStrand = (track.settings.translationStrand as TranslationStrand) ?? 'forward'
+  // Auto-resize sequence track based on zoom level and strand setting. In
+  // transcript view the sequence is already spliced + oriented 5'→3' (mRNA)
+  // by fetchTranscriptSequence, so it must render as 'forward' — its frames
+  // then align with the transcript-coordinate P-site frames.
+  const seqStrand: TranslationStrand = txActive
+    ? 'forward'
+    : ((track.settings.translationStrand as TranslationStrand) ?? 'forward')
   useEffect(() => {
     if (track.type !== 'sequence') return
     const span = txActive ? txEnd - txStart : end - start
@@ -233,8 +238,7 @@ export function TrackView({ track, index, totalTracks, onDragHandleDown }: Track
     ctx.clearRect(0, 0, width, track.height)
 
     if (track.type === 'sequence' && sequenceData !== null) {
-      const strand = (track.settings.translationStrand as TranslationStrand) ?? 'forward'
-      renderSequenceCanvas(ctx, sequenceData, effectiveRegion, width, track.height, strand)
+      renderSequenceCanvas(ctx, sequenceData, effectiveRegion, width, track.height, seqStrand)
     } else if (track.type === 'coverage' && coverageData) {
       const covMode = txActive ? 'frame' as CoverageDisplayMode : (track.settings.displayMode as CoverageDisplayMode) ?? 'area'
       renderCoverageCanvas(ctx, coverageData, effectiveRegion, width, track.height, track.color, covMode)

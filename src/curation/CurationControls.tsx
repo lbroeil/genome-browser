@@ -3,6 +3,7 @@ import {
   hasSplicedStructure, zoomIn, zoomOut,
 } from './navigation'
 import { useCuration } from './useCuration'
+import { useCrosshairStore } from '@/store/crosshairStore'
 import type { CuratedOrf } from './api'
 
 export type ViewMode = 'whole' | 'start' | 'stop' | 'transcript'
@@ -21,6 +22,8 @@ export function CurationControls({
   const spliced = hasSplicedStructure(orf)
   const strandFilter = useCuration((s) => s.strandFilter)
   const setStrandFilter = useCuration((s) => s.setStrandFilter)
+  const crosshairEnabled = useCrosshairStore((s) => s.enabled)
+  const toggleCrosshair = useCrosshairStore((s) => s.toggle)
 
   return (
     <div className="flex items-center gap-2 px-4 py-1.5 border-b border-border bg-card/50 text-xs">
@@ -47,7 +50,12 @@ export function CurationControls({
 
       <div className="flex-1" />
 
-      <label className="flex items-center gap-1.5 mr-1 text-muted-foreground cursor-pointer select-none"
+      <button className={`${btn} ${crosshairEnabled ? active : idle}`} onClick={() => toggleCrosshair()}
+        title="Toggle a vertical crosshair line to align P-sites with the exact codon / amino acid in the hg38 track">
+        Crosshair
+      </button>
+
+      <label className="flex items-center gap-1.5 mx-1 text-muted-foreground cursor-pointer select-none"
         title="Show only the P-site tracks matching this ORF's strand">
         <input type="checkbox" checked={strandFilter} onChange={(e) => setStrandFilter(e.target.checked)} />
         Strand filter {orf.strand ? `(${orf.strand})` : ''}

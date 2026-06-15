@@ -115,11 +115,19 @@ export function remapFeaturesToTranscript(
     const start = txStart ?? 0
     const end = (txEnd ?? mapper.txLength - 1) + 1
 
+    // BED12 block offsets are genomic; on the spliced transcript axis the exons
+    // are contiguous, so drop the block/thick structure and render the feature
+    // as one continuous bar (the ruler's CDS frame bar marks the coding region).
+    const data = feature.data.type === 'annotation'
+      ? { ...feature.data, blockSizes: undefined, blockStarts: undefined, blockCount: undefined }
+      : feature.data
+
     result.push({
       ...feature,
       chromosome: 'tx',
       start: Math.min(start, end),
       end: Math.max(start, end),
+      data,
     })
   }
 

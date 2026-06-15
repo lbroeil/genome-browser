@@ -1,6 +1,6 @@
 import type { GenomicFeature, GenomicRegion } from '@/adapters/types'
 import { bpToPixel } from '@/utils/coordinates'
-import { STRAND_COLORS, FRAME_COLORS } from '@/utils/colors'
+import { STRAND_COLORS, FRAME_COLORS, darken } from '@/utils/colors'
 
 const ROW_HEIGHT = 26
 const ROW_GAP = 2
@@ -224,13 +224,17 @@ export function renderAnnotationCanvas(
           const exW = Math.max(1, bpToPixel(exon.end, region, width) - exX)
 
           if (transcript.cds && transcript.cds.length > 0) {
+            // Non-CDS exon portions (UTR) at half height, CDS darker + full height
+            // so the annotated coding region stands out for overlap comparison.
+            ctx.fillStyle = color
+            ctx.fillRect(exX, y + FEATURE_HEIGHT * 0.25, exW, FEATURE_HEIGHT * 0.5)
             for (const cds of transcript.cds) {
               const cdsOverlapStart = Math.max(exon.start, cds.start)
               const cdsOverlapEnd = Math.min(exon.end, cds.end)
               if (cdsOverlapStart < cdsOverlapEnd) {
                 const cdsX = bpToPixel(cdsOverlapStart, region, width)
                 const cdsW = Math.max(1, bpToPixel(cdsOverlapEnd, region, width) - cdsX)
-                ctx.fillStyle = color
+                ctx.fillStyle = darken(color, 0.3)
                 ctx.fillRect(cdsX, y, cdsW, FEATURE_HEIGHT)
               }
             }
@@ -254,15 +258,68 @@ export function renderAnnotationCanvas(
         }
       }
     } else {
-      // Simple annotation: colored rectangle
-      ctx.fillStyle = color
-      ctx.fillRect(x, y, w, FEATURE_HEIGHT)
+      const ann = feature.data.type === 'annotation' ? feature.data : undefined
+      const blockSizes = ann?.blockSizes
+      const blockStarts = ann?.blockStarts
 
-      if (w > 10 && feature.strand && !groupId) {
-        ctx.fillStyle = '#ffffff'
-        ctx.font = '8px sans-serif'
-        ctx.textAlign = 'center'
-        ctx.fillText(feature.strand === '+' ? '>' : '<', x + w / 2, y + FEATURE_HEIGHT - 2)
+      if (blockSizes && blockStarts && blockSizes.length > 1 && blockStarts.length === blockSizes.length) {
+        // Spliced annotation (BED12): draw each exon block, joined by an intron
+        // line, with the thick (CDS) portion full height and thin (UTR) halved.
+        const midY = y + FEATURE_HEIGHT / 2
+        ctx.strokeStyle = color
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(x, midY)
+        ctx.lineTo(x + w, midY)
+        ctx.stroke()
+
+        const thickStart = ann?.thickStart
+        const thickEnd = ann?.thickEnd
+        const hasThick = thickStart != null && thickEnd != null && thickEnd > thickStart
+
+        const drawSeg = (segStart: number, segEnd: number, h: number) => {
+          if (segEnd <= segStart) return
+          const sx = bpToPixel(segStart, region, width)
+          const sw = Math.max(1, bpToPixel(segEnd, region, width) - sx)
+          ctx.fillStyle = color
+          ctx.fillRect(sx, y + (FEATURE_HEIGHT - h) / 2, sw, h)
+        }
+
+        const n = Math.min(blockSizes.length, blockStarts.length)
+        for (let i = 0; i < n; i++) {
+          const bStart = feature.start + blockStarts[i]
+          const bEnd = bStart + blockSizes[i]
+          if (hasThick) {
+            drawSeg(bStart, Math.min(bEnd, thickStart!), FEATURE_HEIGHT * 0.5)
+            drawSeg(Math.max(bStart, thickStart!), Math.min(bEnd, thickEnd!), FEATURE_HEIGHT)
+            drawSeg(Math.max(bStart, thickEnd!), bEnd, FEATURE_HEIGHT * 0.5)
+          } else {
+            drawSeg(bStart, bEnd, FEATURE_HEIGHT)
+          }
+        }
+
+        // Strand arrows along the intron line
+        if (w > 30 && feature.strand) {
+          ctx.fillStyle = color
+          ctx.font = '8px sans-serif'
+          ctx.textAlign = 'center'
+          const arrowChar = feature.strand === '+' ? '▸' : '◂'
+          const step = Math.max(20, w / 8)
+          for (let ax = x + step; ax < x + w - 10; ax += step) {
+            ctx.fillText(arrowChar, ax, midY + 3)
+          }
+        }
+      } else {
+        // Single-block annotation: colored rectangle
+        ctx.fillStyle = color
+        ctx.fillRect(x, y, w, FEATURE_HEIGHT)
+
+        if (w > 10 && feature.strand && !groupId) {
+          ctx.fillStyle = '#ffffff'
+          ctx.font = '8px sans-serif'
+          ctx.textAlign = 'center'
+          ctx.fillText(feature.strand === '+' ? '>' : '<', x + w / 2, y + FEATURE_HEIGHT - 2)
+        }
       }
     }
 
