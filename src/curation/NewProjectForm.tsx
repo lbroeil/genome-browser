@@ -72,9 +72,10 @@ export function NewProjectForm({ onCreated }: { onCreated: () => void }) {
           className="w-full h-8 px-2 rounded border border-border bg-background text-sm" />
 
         <label className="block text-xs text-muted-foreground">
-          ORF list (CSV / TSV / XLSX / BED12)
-          <input ref={orfRef} type="file" accept=".csv,.tsv,.txt,.xlsx,.bed,.bed12"
-            className="mt-1 block w-full text-xs" />
+          ORF list (CSV / TSV / XLSX / BED / BED12 — any file; format is auto-detected)
+          {/* No accept filter: browsers grey out extensions like .bed unreliably.
+              The backend validates and auto-detects the format. */}
+          <input ref={orfRef} type="file" className="mt-1 block w-full text-xs" />
         </label>
 
         <label className="block text-xs text-muted-foreground">
