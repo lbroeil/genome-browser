@@ -2,12 +2,14 @@ import { Browser } from './components/Browser'
 import { ProjectPicker } from './curation/ProjectPicker'
 import { CurationView } from './curation/CurationView'
 import { StatsView } from './curation/StatsView'
+import { DemoLauncher } from './curation/DemoLauncher'
 import { useHashRoute } from './curation/router'
 
 function App() {
   const route = useHashRoute()
 
   if (route === '/browser') return <Browser />
+  if (route === '/demo') return <DemoLauncher />
 
   const curate = route.match(/^\/curate\/(\d+)/)
   if (curate) return <CurationView key={curate[1]} projectId={Number(curate[1])} />

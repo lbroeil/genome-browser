@@ -10,9 +10,14 @@ export function ProjectPicker() {
   const [projects, setProjects] = useState<Project[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [hasDemo, setHasDemo] = useState(false)
 
   const refresh = useCallback(() => {
     api.listProjects().then(setProjects).catch((e) => setError(String(e)))
+  }, [])
+
+  useEffect(() => {
+    api.getDemoProject().then((d) => setHasDemo(!!d)).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -54,6 +59,11 @@ export function ProjectPicker() {
             className="w-full h-9 rounded bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">
             {busy ? 'Signing in…' : 'Continue'}
           </button>
+          {hasDemo && (
+            <p className="text-center text-xs text-muted-foreground">
+              Just exploring? <a href="#/demo" className="text-primary hover:underline">View the demo →</a>
+            </p>
+          )}
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
       </div>

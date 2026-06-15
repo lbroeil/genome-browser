@@ -88,6 +88,8 @@ export const api = {
 
   listProjects: () => req<Project[]>('/api/projects'),
 
+  getDemoProject: () => req<Project | null>('/api/demo-project'),
+
   createProject: (form: FormData) =>
     req<Project>('/api/projects', { method: 'POST', body: form }),
 
