@@ -13,25 +13,32 @@ import { api, type Project, type CuratedOrf, type Decision } from './api'
 function resolveSessionUrls(session: unknown): unknown {
   if (!session || typeof session !== 'object') return session
   const s = JSON.parse(JSON.stringify(session)) as { tracks?: Array<{ source?: Record<string, string> }> }
+  // Resolve to an ABSOLUTE URL. In prod apiBase is '' (same origin), which would
+  // leave a root-relative "/data/x.bw" — and the bigWig/BAM remote-file readers
+  // need an absolute URL, so fall back to the current origin.
+  const base = api.apiBase || (typeof window !== 'undefined' ? window.location.origin : '')
   for (const t of s.tracks ?? []) {
     const src = t.source
-    if (src?.url && src.url.startsWith('/')) src.url = `${api.apiBase}${src.url}`
+    if (src?.url && src.url.startsWith('/')) src.url = `${base}${src.url}`
   }
   return s
 }
 
-const ORF_TRACK_ID = 'orf-list-track'
+const ORF_TRACK_ID = 'orf-list-track'        // the single ORF currently under review
+const ALL_ORFS_TRACK_ID = 'all-orfs-track'   // dim context layer: every candidate ORF
 const USER_STORAGE_KEY = 'curation_user'
 
 /**
  * Curation track order, top → bottom:
- *   gene models / annotation context (all candidate ORFs)
- *   → ORFs under review (the ORF of interest)
+ *   gene models (GENCODE context)
+ *   → all candidate ORFs (dim context)
+ *   → ORF under review (the one being judged, highlighted)
  *   → hg38 sequence / translation
  *   → P-site coverage.
  */
 function curationRank(t: TrackConfig): number {
-  if (t.id === ORF_TRACK_ID) return 2 // ORFs under review — below the broader context
+  if (t.id === ALL_ORFS_TRACK_ID) return 1 // dim context of all candidates
+  if (t.id === ORF_TRACK_ID) return 2 // the ORF under review — below the broader context
   switch (t.type) {
     case 'gene_model': return 0
     case 'annotation':
@@ -46,6 +53,30 @@ function curationRank(t: TrackConfig): number {
 function orderCurationTracks(): void {
   const ordered = [...useTrackStore.getState().tracks].sort((a, b) => curationRank(a) - curationRank(b))
   useTrackStore.setState({ tracks: ordered })
+}
+
+/**
+ * (Re)build the "ORF under review" track so it contains ONLY the ORF being
+ * judged — highlighted bright — so it's unambiguous which one the vote applies
+ * to, even when neighbouring candidates overlap. The full candidate set stays
+ * visible in the dim ALL_ORFS_TRACK_ID context layer above.
+ */
+async function setReviewTrack(orf: CuratedOrf): Promise<void> {
+  const ts = useTrackStore.getState()
+  if (ts.tracks.some((t) => t.id === ORF_TRACK_ID)) ts.removeTrack(ORF_TRACK_ID)
+  const adapter = new OrfListAdapter([orf])
+  await adapter.initialize()
+  ts.addTrack({
+    id: ORF_TRACK_ID,
+    name: `▶ Under review — ${orf.name}`,
+    type: 'annotation',
+    adapter,
+    height: 70,
+    color: '#0ea5e9',
+    visible: true,
+    settings: { displayMode: 'frame' },
+  })
+  orderCurationTracks()
 }
 
 interface StoredUser { id: number; username: string }
@@ -79,7 +110,7 @@ interface CurationState {
   logout: () => void
   loadProject: (projectId: number) => Promise<void>
   loadNext: () => Promise<void>
-  vote: (decision: Decision, notes: string | undefined, regionViewed: string | undefined) => Promise<void>
+  vote: (decision: Decision, notes: string | undefined, regionViewed: string | undefined, flagStartCodon?: boolean) => Promise<void>
   setStrandFilter: (on: boolean) => void
 }
 
@@ -125,27 +156,32 @@ export const useCuration = create<CurationState>((set, get) => {
         //    if one is set. Then ensure the hg38 sequence track is present.
         if (baseSession && Array.isArray((baseSession as { tracks?: unknown[] }).tracks) &&
             (baseSession as { tracks: unknown[] }).tracks.length > 0) {
-          await restoreSessionFromObject(resolveSessionUrls(baseSession))
+          const restoreErrors = await restoreSessionFromObject(resolveSessionUrls(baseSession))
+          if (restoreErrors.length > 0) {
+            console.warn(`Base session: ${restoreErrors.length} track(s) failed to load:`, restoreErrors)
+          }
         }
         await ensureSequenceTrack()
 
-        // 2. Add the ORFs-under-review annotation track (frame-colored).
+        // 2. Add a dim context track showing ALL candidate ORFs (the one being
+        //    judged is highlighted separately in loadNext via setReviewTrack).
         const ts = useTrackStore.getState()
+        if (ts.tracks.some((t) => t.id === ALL_ORFS_TRACK_ID)) ts.removeTrack(ALL_ORFS_TRACK_ID)
         if (ts.tracks.some((t) => t.id === ORF_TRACK_ID)) ts.removeTrack(ORF_TRACK_ID)
-        const adapter = new OrfListAdapter(orfs)
-        await adapter.initialize()
+        const allAdapter = new OrfListAdapter(orfs)
+        await allAdapter.initialize()
         ts.addTrack({
-          id: ORF_TRACK_ID,
-          name: `ORFs under review — ${project.name}`,
+          id: ALL_ORFS_TRACK_ID,
+          name: `All candidate ORFs — ${project.name}`,
           type: 'annotation',
-          adapter,
-          height: 80,
-          color: '#0ea5e9',
+          adapter: allAdapter,
+          height: 70,
+          color: '#c4b5fd',
           visible: true,
           settings: { displayMode: 'frame' },
         })
 
-        // 3. Enforce curation track order (ORF list on top, sequence at bottom).
+        // 3. Enforce curation track order (context on top, sequence at bottom).
         orderCurationTracks()
 
         set({ project, orfs, loading: false })
@@ -167,6 +203,7 @@ export const useCuration = create<CurationState>((set, get) => {
           done: next.done,
         })
         if (next.orf) {
+          await setReviewTrack(next.orf)
           applyStrandVisibility(next.orf.strand, get().strandFilter)
           applySequenceStrand(next.orf.strand)
           viewWholeOrf(next.orf)
@@ -176,7 +213,7 @@ export const useCuration = create<CurationState>((set, get) => {
       }
     },
 
-    vote: async (decision, notes, regionViewed) => {
+    vote: async (decision, notes, regionViewed, flagStartCodon) => {
       const { current, userId } = get()
       if (!current || userId == null) return
       set({ lastDecision: decision })
@@ -185,6 +222,7 @@ export const useCuration = create<CurationState>((set, get) => {
           user_id: userId,
           orf_id: current.id,
           decision,
+          flag_start_codon: decision === 'good' ? !!flagStartCodon : false,
           notes: notes?.trim() || null,
           region_viewed: regionViewed ?? null,
         })

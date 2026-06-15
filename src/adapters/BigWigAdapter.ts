@@ -1,6 +1,7 @@
 import { BigWig } from '@gmod/bbi'
 import { RemoteFile, BlobFile } from 'generic-filehandle2'
 import { TauriFile, isFilePath } from './TauriFile'
+import { mapChromosomeName } from '@/utils/coordinates'
 import type { GenomicAdapter, AdapterMetadata, GenomicRegion, GenomicFeature, CoverageBin } from './types'
 
 export class BigWigAdapter implements GenomicAdapter {
@@ -38,10 +39,16 @@ export class BigWigAdapter implements GenomicAdapter {
   async getCoverage(region: GenomicRegion, bins: number): Promise<CoverageBin[]> {
     if (!this.bigwig) throw new Error('Not initialized')
 
+    // The bigWig may name chromosomes differently than the viewport (e.g. the
+    // file uses "1" while the ORFs/sequence use "chr1"). Resolve to the file's
+    // own ref name; if it has no matching chromosome, there's nothing to draw.
+    const ref = mapChromosomeName(region.chromosome, this.refNames)
+    if (!ref) return []
+
     const bpPerBin = (region.end - region.start) / bins
 
     const features = await this.bigwig.getFeatures(
-      region.chromosome,
+      ref,
       region.start,
       region.end,
       { scale: 1 / bpPerBin },

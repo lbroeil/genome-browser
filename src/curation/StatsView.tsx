@@ -42,6 +42,7 @@ export function StatsView({ projectId }: { projectId: number }) {
               <th className="py-1.5 pr-3">Type</th>
               <th className="py-1.5 pr-3">Gene</th>
               <th className="py-1.5 pr-3 text-right">Good</th>
+              <th className="py-1.5 pr-3 text-right" title="Of the Good votes, how many flagged a likely-wrong start codon">Good (start?)</th>
               <th className="py-1.5 pr-3 text-right">Bad</th>
               <th className="py-1.5 pr-3 text-right">Skip</th>
               <th className="py-1.5 pr-3 text-right">Good %</th>
@@ -55,6 +56,9 @@ export function StatsView({ projectId }: { projectId: number }) {
                 <td className="py-1 pr-3">{r.orf_type}</td>
                 <td className="py-1 pr-3 text-muted-foreground">{r.gene_name ?? '—'}</td>
                 <td className="py-1 pr-3 text-right">{r.good_votes}</td>
+                <td className={`py-1 pr-3 text-right ${r.good_flagged_start > 0 ? 'text-amber-600 font-medium' : 'text-muted-foreground'}`}>
+                  {r.good_flagged_start > 0 ? r.good_flagged_start : '—'}
+                </td>
                 <td className="py-1 pr-3 text-right">{r.bad_votes}</td>
                 <td className="py-1 pr-3 text-right">{r.skip_votes}</td>
                 <td className="py-1 pr-3 text-right">{r.total_votes > 0 ? `${r.good_pct}%` : '—'}</td>

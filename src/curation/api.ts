@@ -46,6 +46,7 @@ export interface VotePayload {
   user_id: number
   orf_id: number
   decision: Decision
+  flag_start_codon?: boolean
   notes?: string | null
   region_viewed?: string | null
 }
@@ -59,6 +60,7 @@ export interface OrfStatsRow {
   good_votes: number
   bad_votes: number
   skip_votes: number
+  good_flagged_start: number
   good_pct: number
   consensus: string
 }

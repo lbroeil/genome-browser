@@ -19,7 +19,26 @@ const META_KEYS: [string, string][] = [
 
 function formatCoords(orf: CuratedOrf): string {
   if (!orf.chromosome || orf.start == null || orf.stop == null) return '—'
-  return `${orf.chromosome}:${(orf.start + 1).toLocaleString()}–${orf.stop.toLocaleString()} (${orf.strand ?? '?'})`
+  return `${orf.chromosome}:${(orf.start + 1).toLocaleString()}–${orf.stop.toLocaleString()}`
+}
+
+/** Prominent, color-coded strand indicator — negative strand is easy to miss. */
+function StrandBadge({ strand }: { strand: string | null }) {
+  if (strand === '-') {
+    return (
+      <span className="px-2 py-0.5 rounded text-xs font-semibold border bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40">
+        − reverse strand
+      </span>
+    )
+  }
+  if (strand === '+') {
+    return (
+      <span className="px-2 py-0.5 rounded text-xs font-semibold border bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40">
+        + forward strand
+      </span>
+    )
+  }
+  return <span className="px-2 py-0.5 rounded text-xs bg-secondary text-muted-foreground">strand ?</span>
 }
 
 export function CurationView({ projectId }: { projectId: number }) {
@@ -28,6 +47,7 @@ export function CurationView({ projectId }: { projectId: number }) {
     loading, error, loadProject, vote,
   } = useCuration()
   const [notes, setNotes] = useState('')
+  const [flagStart, setFlagStart] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>('whole')
   const [showLoader, setShowLoader] = useState(false)
 
@@ -45,12 +65,13 @@ export function CurationView({ projectId }: { projectId: number }) {
   // Reset per-ORF UI state when the current ORF changes.
   useEffect(() => {
     setNotes('')
+    setFlagStart(false)
     setViewMode('whole')
   }, [current?.id])
 
   const submit = useCallback((decision: Decision) => {
-    void vote(decision, notes, viewMode)
-  }, [vote, notes, viewMode])
+    void vote(decision, notes, viewMode, flagStart)
+  }, [vote, notes, viewMode, flagStart])
 
   // Keyboard shortcuts: A/← bad, S/↓ skip, D/→ good. Ignore while typing.
   useEffect(() => {
@@ -125,6 +146,7 @@ export function CurationView({ projectId }: { projectId: number }) {
               <div className="px-4 py-3 border-b border-border space-y-1">
                 <p className="text-base font-semibold break-all">{current.name}</p>
                 <div className="flex items-center gap-2 flex-wrap">
+                  <StrandBadge strand={current.strand} />
                   <span className="px-2 py-0.5 rounded bg-secondary text-xs">{current.orf_type}</span>
                   {current.gene_name && <span className="text-xs text-muted-foreground">{current.gene_name}</span>}
                 </div>
@@ -153,6 +175,15 @@ export function CurationView({ projectId }: { projectId: number }) {
                   placeholder="e.g. clear 3-nt periodicity, strong start…"
                   className="mt-1 w-full text-xs rounded border border-border bg-background p-2 resize-none"
                 />
+              </div>
+
+              {/* Start-codon flag — travels with a Good vote */}
+              <div className="px-4 pb-1">
+                <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                  <input type="checkbox" className="mt-0.5" checked={flagStart}
+                    onChange={(e) => setFlagStart(e.target.checked)} />
+                  <span>Real ORF, but <span className="text-foreground">start codon may be wrong</span> (recorded with a Good vote)</span>
+                </label>
               </div>
 
               {/* Vote buttons */}
