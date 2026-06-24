@@ -2,6 +2,7 @@ import type { GenomicRegion } from '@/adapters/types'
 import { bpToPixel } from '@/utils/coordinates'
 import { NUCLEOTIDE_COLORS } from '@/utils/colors'
 import { CODON_TABLE, reverseComplement } from '@/utils/translation'
+import type { OrfFrameOverlay } from '@/utils/orfFrame'
 
 const FRAME_ROW_HEIGHT = 16
 const SEQUENCE_ROW_HEIGHT = 18
@@ -14,6 +15,16 @@ const MAX_BP_TRANSLATION = 600
 
 export type TranslationStrand = 'forward' | 'reverse' | 'both'
 
+/** Which forward-block frame row holds the ORF (or -1). The ORF lives in the row
+ *  whose codon boundaries align with the ORF start codon. */
+function orfForwardRow(region: GenomicRegion, o: OrfFrameOverlay): number {
+  return ((((o.codingStart - region.start) % 3) + 3) % 3)
+}
+/** Which reverse-block frame row holds the ORF (or -1). */
+function orfReverseRow(region: GenomicRegion, o: OrfFrameOverlay): number {
+  return ((((region.end - o.codingEnd) % 3) + 3) % 3)
+}
+
 export function renderSequenceCanvas(
   ctx: CanvasRenderingContext2D,
   sequence: string,
@@ -21,6 +32,7 @@ export function renderSequenceCanvas(
   width: number,
   height: number,
   strand: TranslationStrand = 'forward',
+  overlay?: OrfFrameOverlay,
 ) {
   const viewportBp = region.end - region.start
   if (viewportBp > MAX_BP_TRANSLATION || sequence.length === 0) {
@@ -61,11 +73,15 @@ export function renderSequenceCanvas(
     yOffset += SEQUENCE_ROW_HEIGHT + 2
   }
 
+  const orfRowFwd = overlay && overlay.strand === 'forward' ? orfForwardRow(region, overlay) : -1
+  const orfRowRev = overlay && overlay.strand === 'reverse' ? orfReverseRow(region, overlay) : -1
+
   // --- Forward strand frames (0, 1, 2) ---
   if (showForward) {
     drawFrameLabel(ctx, '+', yOffset)
     for (let frame = 0; frame < 3; frame++) {
-      drawTranslationFrame(ctx, sequence, region, width, yOffset, frame, false, showLetters)
+      drawTranslationFrame(ctx, sequence, region, width, yOffset, frame, false, showLetters,
+        overlay, frame === orfRowFwd)
       yOffset += FRAME_ROW_HEIGHT + FRAME_GAP
     }
     if (showReverse) yOffset += 2
@@ -76,7 +92,8 @@ export function renderSequenceCanvas(
     const rcSeq = reverseComplement(sequence)
     drawFrameLabel(ctx, '\u2212', yOffset)
     for (let frame = 0; frame < 3; frame++) {
-      drawTranslationFrame(ctx, rcSeq, region, width, yOffset, frame, true, showLetters)
+      drawTranslationFrame(ctx, rcSeq, region, width, yOffset, frame, true, showLetters,
+        overlay, frame === orfRowRev)
       yOffset += FRAME_ROW_HEIGHT + FRAME_GAP
     }
   }
@@ -98,30 +115,29 @@ function drawTranslationFrame(
   frame: number,
   isReverse: boolean,
   showLetters: boolean,
+  overlay?: OrfFrameOverlay,
+  isOrfRow = false,
 ) {
   const viewportBp = region.end - region.start
   const bpWidth = width / viewportBp
   const seqLen = sequence.length
+  // With an ORF overlay, dim the frame rows that aren't the ORF's so the eye
+  // goes straight to the ORF's reading frame.
+  const dim = !!overlay && !isOrfRow
 
-  ctx.fillStyle = '#a3a3a3'
+  ctx.fillStyle = isOrfRow ? '#16a34a' : '#a3a3a3'
   ctx.font = '8px monospace'
   ctx.textAlign = 'left'
-  ctx.fillText(`F${frame + 1}`, 12, yOffset + 11)
+  ctx.fillText(isOrfRow ? `F${frame + 1} ORF` : `F${frame + 1}`, 12, yOffset + 11)
 
   for (let i = frame; i + 2 < seqLen; i += 3) {
     const codon = sequence[i] + sequence[i + 1] + sequence[i + 2]
     const aa = CODON_TABLE[codon] ?? '?'
 
-    let x: number
     const codonWidth = bpWidth * 3
-    if (isReverse) {
-      const genomicEnd = region.end - i
-      const genomicStart = genomicEnd - 3
-      x = bpToPixel(genomicStart, region, width)
-    } else {
-      const genomicStart = region.start + i
-      x = bpToPixel(genomicStart, region, width)
-    }
+    // genomicStart = the lower coordinate of this codon (in render-coordinate space)
+    const codonGStart = isReverse ? region.end - i - 3 : region.start + i
+    const x = bpToPixel(codonGStart, region, width)
 
     let bgColor: string
     let textColor: string
@@ -136,16 +152,38 @@ function drawTranslationFrame(
       textColor = '#374151'
     }
 
+    const baseAlpha = aa === 'M' || aa === '*' ? 0.85 : 0.4
     ctx.fillStyle = bgColor
-    ctx.globalAlpha = aa === 'M' || aa === '*' ? 0.85 : 0.4
+    ctx.globalAlpha = dim ? baseAlpha * 0.35 : baseAlpha
     ctx.fillRect(x, yOffset, codonWidth - 0.5, FRAME_ROW_HEIGHT)
     ctx.globalAlpha = 1.0
 
+    // ORF-anchored decorations: shade the coding span, box the start + stop codons.
+    let isStart = false
+    let isStop = false
+    if (overlay && isOrfRow) {
+      const inCds = codonGStart >= overlay.codingStart && codonGStart < overlay.codingEnd
+      isStart = isReverse ? codonGStart === overlay.codingEnd - 3 : codonGStart === overlay.codingStart
+      isStop = isReverse ? codonGStart === overlay.codingStart : codonGStart === overlay.codingEnd - 3
+      if (inCds) {
+        ctx.fillStyle = '#16a34a'
+        ctx.globalAlpha = 0.15
+        ctx.fillRect(x, yOffset, codonWidth - 0.5, FRAME_ROW_HEIGHT)
+        ctx.globalAlpha = 1.0
+      }
+    }
+
     if (showLetters && codonWidth > 8) {
-      ctx.fillStyle = textColor
+      ctx.fillStyle = dim ? '#9ca3af' : textColor
       ctx.font = `${Math.min(12, codonWidth * 0.6)}px monospace`
       ctx.textAlign = 'center'
       ctx.fillText(aa, x + codonWidth / 2, yOffset + FRAME_ROW_HEIGHT - 3)
+    }
+
+    if (isStart || isStop) {
+      ctx.strokeStyle = isStart ? '#16a34a' : '#ef4444'
+      ctx.lineWidth = 2
+      ctx.strokeRect(x + 1, yOffset + 1, codonWidth - 2.5, FRAME_ROW_HEIGHT - 2)
     }
   }
 }

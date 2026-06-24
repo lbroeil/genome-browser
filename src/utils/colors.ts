@@ -34,6 +34,11 @@ export const TRACK_COLORS = {
 // Reading frame colors for Ribo-seq p-site visualization
 export const FRAME_COLORS = ['#e74c3c', '#2ecc71', '#3498db'] as const // Frame 0: red, 1: green, 2: blue
 
+// ORF-anchored frame palette: in the curation flow, P-sites/translation are
+// coloured RELATIVE to the ORF under review so "in-frame" is always the same
+// bold colour and the two out-of-frame phases are muted. Index 0 = in-frame.
+export const ORF_FRAME_COLORS = ['#16a34a', '#cbd5e1', '#94a3b8'] as const // in-frame green, +1 / +2 muted greys
+
 // Colorblind-safe palette (Wong 2011)
 export const COLORBLIND_SAFE = [
   '#000000',

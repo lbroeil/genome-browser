@@ -11,6 +11,35 @@
 - **No test suite** — verify changes by running the app and testing manually
 - **TypeScript:** pre-existing type errors in adapter files; build skips `tsc` (Vite/esbuild handles transpilation)
 
+## Web deployment (orf-swiper curation app)
+
+This same codebase ships in **two** forms: the Tauri desktop app (above) and a **web SPA** that powers the ORF-curation site at `orf.luukbroeils.nl`. The curation work lives on branch **`feature/orf-curation`** and runs in the browser, not Tauri — so guard Tauri-only paths with `isTauri()` (the web build has no IPC backend).
+
+**How the web app is served:** the `orf-swiper` FastAPI container (defined in `../docker-compose.yml`, port `8201`) serves this project's `dist/` via a read-only bind mount:
+```
+./genome-browser/dist:/app/frontend-dist:ro    # in docker-compose.yml
+```
+So **a rebuilt `dist/` goes live immediately** — no container rebuild/restart, no copy step. Just build and refresh the browser.
+
+**Build the web bundle** (system Node is too old; build in a throwaway `node:22` container from this dir):
+```bash
+docker run --rm -v "$PWD":/app -w /app node:22 ./node_modules/.bin/vite build
+```
+This is `vite build` invoked directly on purpose — `pnpm build` runs a pre-build deps check that hard-fails on pnpm 11's unapproved `core-js` build script. Output: `dist/assets/index-<hash>.js`.
+
+**Fresh checkout (no `node_modules` yet)** — install first, then build:
+```bash
+docker run --rm -e CI=true -v "$PWD":/app -w /app node:22 sh -c "corepack enable && pnpm install --frozen-lockfile"
+```
+The install ends with `ERR_PNPM_IGNORED_BUILDS` (core-js postinstall) and a non-zero exit — **benign**, `node_modules` is fully linked. `CI=true` is required so pnpm doesn't prompt to purge the existing (macOS-arch) `node_modules` with no TTY.
+
+**Verify it's live:** `curl -s http://localhost:8201/ | grep -o 'index-[^"]*\.js'` should report the new hash.
+
+### Server-side constraints (this app lives inside a busy Docker host)
+- The backend, DB (`curation.db`), uploaded images, and ribo-seq tracks live in `../orf-swiper/` (bind-mounted into its container). Track files are served same-origin, read-only.
+- **Only ever build/start/log the single `orf-swiper` service.** NEVER run bare `docker compose down`/`up`/`up --build` — that would touch ~50 unrelated services on this host.
+- This repo (`lbroeil/genome-browser`) and `orf-swiper` are **separate git repos** that happen to sit inside the docker tree. Do not commit/push to `main` on either; curation work goes on `feature/orf-curation`. Wait for an explicit instruction before committing.
+
 ## Architecture
 
 ### Data flow

@@ -4,7 +4,7 @@ import { useTranscriptViewStore } from '@/store/transcriptViewStore'
 import { useCrosshairStore } from '@/store/crosshairStore'
 import { generateTicks, formatBp, bpToPixel, pixelToBp } from '@/utils/coordinates'
 import { useThemeColors } from '@/hooks/useThemeColors'
-import { FRAME_COLORS } from '@/utils/colors'
+import { FRAME_COLORS, ORF_FRAME_COLORS } from '@/utils/colors'
 
 const RULER_HEIGHT = 40
 
@@ -132,17 +132,19 @@ export function GenomeRuler() {
           ctx.fillStyle = 'rgba(128,128,128,0.2)'
           ctx.fillRect(cdsX1, cdsBarY, cdsX2 - cdsX1, cdsBarH)
 
-          // Frame-colored codon blocks within visible CDS
+          // Frame-colored codon blocks within visible CDS — coloured RELATIVE to
+          // the ORF start (in-frame green, +1/+2 muted) so it matches the
+          // ORF-anchored P-site track below.
           if (span <= 3000) {
             for (let bp = cdsVisStart; bp < cdsVisEnd; bp++) {
-              const frame = (bp - txCdsRange.txStart) % 3
+              const frame = ((bp - txCdsRange.txStart) % 3 + 3) % 3
               const x1 = bpToPixel(bp, effRegion, width)
               const x2 = bpToPixel(bp + 1, effRegion, width)
-              ctx.fillStyle = FRAME_COLORS[frame]
+              ctx.fillStyle = ORF_FRAME_COLORS[frame]
               ctx.fillRect(x1, cdsBarY, Math.max(1, x2 - x1), cdsBarH)
             }
           } else {
-            ctx.fillStyle = FRAME_COLORS[0]
+            ctx.fillStyle = ORF_FRAME_COLORS[0]
             ctx.fillRect(cdsX1, cdsBarY, cdsX2 - cdsX1, cdsBarH)
           }
 

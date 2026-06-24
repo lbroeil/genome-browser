@@ -4,6 +4,8 @@ import { GenomeView } from '@/components/GenomeView'
 import { FileLoader } from '@/components/FileLoader'
 import { useCuration } from './useCuration'
 import { CurationControls, type ViewMode } from './CurationControls'
+import { HelpOverlay, hasSeenHelp } from './HelpOverlay'
+import { useStartCodonMarkStore } from '@/store/startCodonMarkStore'
 import { navigate } from './router'
 import type { Decision, CuratedOrf } from './api'
 
@@ -44,12 +46,18 @@ function StrandBadge({ strand }: { strand: string | null }) {
 export function CurationView({ projectId }: { projectId: number }) {
   const {
     userId, username, project, current, progressCurrent, progressTotal, done,
-    loading, error, loadProject, vote,
+    loading, error, loadProject, vote, rewind, votedHistory,
   } = useCuration()
   const [notes, setNotes] = useState('')
   const [flagStart, setFlagStart] = useState(false)
+  const [uncertain, setUncertain] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>('whole')
   const [showLoader, setShowLoader] = useState(false)
+  const [showHelp, setShowHelp] = useState(!hasSeenHelp())
+  const markEnabled = useStartCodonMarkStore((s) => s.enabled)
+  const markedPosition = useStartCodonMarkStore((s) => s.position)
+  const setMarkEnabled = useStartCodonMarkStore((s) => s.setEnabled)
+  const resetMark = useStartCodonMarkStore((s) => s.reset)
 
   // Require a user; otherwise bounce to the picker.
   useEffect(() => {
@@ -66,12 +74,14 @@ export function CurationView({ projectId }: { projectId: number }) {
   useEffect(() => {
     setNotes('')
     setFlagStart(false)
+    setUncertain(false)
     setViewMode('whole')
+    resetMark()
   }, [current?.id])
 
   const submit = useCallback((decision: Decision) => {
-    void vote(decision, notes, viewMode, flagStart)
-  }, [vote, notes, viewMode, flagStart])
+    void vote(decision, notes, viewMode, flagStart, uncertain ? 'uncertain' : 'confident', markedPosition)
+  }, [vote, notes, viewMode, flagStart, uncertain, markedPosition])
 
   // Keyboard shortcuts: A/← bad, S/↓ skip, D/→ good. Ignore while typing.
   useEffect(() => {
@@ -82,10 +92,11 @@ export function CurationView({ projectId }: { projectId: number }) {
       if (e.key === 'a' || e.key === 'ArrowLeft') { e.preventDefault(); submit('bad') }
       else if (e.key === 'd' || e.key === 'ArrowRight') { e.preventDefault(); submit('good') }
       else if (e.key === 's' || e.key === 'ArrowDown') { e.preventDefault(); submit('skip') }
+      else if (e.key === 'z' || e.key === 'Backspace') { e.preventDefault(); void rewind() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [current, submit])
+  }, [current, submit, rewind])
 
   const pct = progressTotal > 0 ? Math.round((progressCurrent / progressTotal) * 100) : 0
 
@@ -104,6 +115,7 @@ export function CurationView({ projectId }: { projectId: number }) {
             {showLoader ? 'Hide add-tracks' : '＋ Add my tracks'}
           </button>
           <button onClick={() => navigate(`/stats/${projectId}`)} className="hover:text-foreground">Stats</button>
+          <button onClick={() => setShowHelp(true)} className="hover:text-foreground" title="Curation guide">?</button>
           <span>{username}</span>
         </div>
       </header>
@@ -177,17 +189,41 @@ export function CurationView({ projectId }: { projectId: number }) {
                 />
               </div>
 
-              {/* Start-codon flag — travels with a Good vote */}
-              <div className="px-4 pb-1">
+              {/* Confidence & flags */}
+              <div className="px-4 pb-1 space-y-1.5">
+                <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                  <input type="checkbox" className="mt-0.5" checked={uncertain}
+                    onChange={(e) => setUncertain(e.target.checked)} />
+                  <span><span className="text-foreground">Uncertain</span> — I'm not confident in my decision</span>
+                </label>
                 <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer select-none">
                   <input type="checkbox" className="mt-0.5" checked={flagStart}
-                    onChange={(e) => setFlagStart(e.target.checked)} />
+                    onChange={(e) => { setFlagStart(e.target.checked); setMarkEnabled(e.target.checked) }} />
                   <span>Real ORF, but <span className="text-foreground">start codon may be wrong</span> (recorded with a Good vote)</span>
                 </label>
+                {flagStart && (
+                  <p className="text-[10px] ml-5 text-amber-600">
+                    {markedPosition != null
+                      ? `Suggested start codon: ${(markedPosition + 1).toLocaleString()}–${(markedPosition + 3).toLocaleString()} (click track to change)`
+                      : 'Click on the track to mark the suggested start codon'}
+                  </p>
+                )}
               </div>
 
+              {/* Undo */}
+              {votedHistory.length > 0 && (
+                <div className="px-4 mt-auto">
+                  <button onClick={() => void rewind()}
+                    className="w-full h-7 rounded border border-border bg-secondary/50 hover:bg-accent text-xs text-muted-foreground flex items-center justify-center gap-1.5">
+                    <span>Undo</span>
+                    <span className="opacity-60">— voted {votedHistory[votedHistory.length - 1].decision}</span>
+                    <span className="opacity-40 ml-1">Z</span>
+                  </button>
+                </div>
+              )}
+
               {/* Vote buttons */}
-              <div className="mt-auto px-4 py-3 border-t border-border grid grid-cols-3 gap-2">
+              <div className={`${votedHistory.length > 0 ? '' : 'mt-auto'} px-4 py-3 border-t border-border grid grid-cols-3 gap-2`}>
                 <button onClick={() => submit('bad')}
                   className="h-12 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-semibold">
                   Bad<span className="block text-[10px] font-normal opacity-80">A / ←</span>
@@ -213,6 +249,7 @@ export function CurationView({ projectId }: { projectId: number }) {
           <GenomeView />
         </main>
       </div>
+      <HelpOverlay open={showHelp} onClose={() => setShowHelp(false)} />
     </div>
   )
 }

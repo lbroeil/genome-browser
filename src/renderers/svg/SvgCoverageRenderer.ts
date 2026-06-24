@@ -1,6 +1,7 @@
 import type { CoverageBin, GenomicRegion } from '@/adapters/types'
 import { bpToPixel } from '@/utils/coordinates'
-import { FRAME_COLORS } from '@/utils/colors'
+import { FRAME_COLORS, ORF_FRAME_COLORS } from '@/utils/colors'
+import { orfRelativeFrame, type OrfFrameOverlay } from '@/utils/orfFrame'
 
 export type SvgCoverageDisplayMode = 'area' | 'bar' | 'frame'
 
@@ -12,6 +13,7 @@ export function renderCoverageSvg(
   color: string,
   trackName: string,
   displayMode: SvgCoverageDisplayMode = 'area',
+  overlay?: OrfFrameOverlay,
 ): SVGGElement {
   const ns = 'http://www.w3.org/2000/svg'
   const g = document.createElementNS(ns, 'g')
@@ -30,14 +32,18 @@ export function renderCoverageSvg(
   dataGroup.setAttribute('class', 'data')
 
   if (displayMode === 'frame') {
-    // Frame-colored bars for Ribo-seq
+    // Frame-colored bars for Ribo-seq. With an ORF overlay, colour relative to
+    // the ORF reading frame (in-frame bold green, out-of-frame muted).
     for (let f = 0; f < 3; f++) {
       const frameGroup = document.createElementNS(ns, 'g')
       frameGroup.setAttribute('class', `frame-${f}`)
-      frameGroup.setAttribute('fill', FRAME_COLORS[f])
+      frameGroup.setAttribute('fill', overlay ? ORF_FRAME_COLORS[f] : FRAME_COLORS[f])
+      if (overlay && f !== 0) frameGroup.setAttribute('fill-opacity', '0.5')
 
       for (const bin of bins) {
-        if (bin.value === 0 || (bin.frame ?? (bin.start % 3)) !== f) continue
+        if (bin.value === 0) continue
+        const binFrame = overlay ? orfRelativeFrame(bin.start, overlay) : (bin.frame ?? (bin.start % 3))
+        if (binFrame !== f) continue
         const x = bpToPixel(bin.start, region, width)
         const xEnd = bpToPixel(bin.end, region, width)
         const barW = Math.max(1, xEnd - x)

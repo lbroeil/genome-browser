@@ -13,6 +13,9 @@ import { renderSequenceCanvas, getSequenceTrackHeight, type TranslationStrand } 
 import { fetchTranscriptCoverage, fetchTranscriptSequence, remapFeaturesToTranscript } from '@/utils/transcriptData'
 import { TranscriptCoordinateMapper } from '@/utils/TranscriptCoordinateMapper'
 import { useCrosshairStore } from '@/store/crosshairStore'
+import { useOrfFrameStore } from '@/store/orfFrameStore'
+import { useStartCodonMarkStore } from '@/store/startCodonMarkStore'
+import type { OrfFrameOverlay } from '@/utils/orfFrame'
 import type { GenomicFeature, CoverageBin } from '@/adapters/types'
 
 interface TrackViewProps {
@@ -54,6 +57,26 @@ export function TrackView({ track, index, totalTracks, onDragHandleDown }: Track
   const effectiveRegion = txActive && txMapper
     ? { chromosome: 'tx', start: txStart, end: txEnd }
     : region
+
+  // Re-render when start codon mark changes
+  const markPosition = useStartCodonMarkStore((s) => s.position)
+  const markEnabled = useStartCodonMarkStore((s) => s.enabled)
+
+  // ORF frame anchor for the curation flow: colour P-sites + translation relative
+  // to the ORF under review. Transcript view uses the spliced CDS range (sense
+  // oriented → 'forward'); genomic view uses the ORF's genomic coding anchor.
+  const txCdsRange = useTranscriptViewStore((s) => s.cdsRange)
+  const orfAnchor = useOrfFrameStore((s) => s.anchor)
+  let orfOverlay: OrfFrameOverlay | undefined
+  if (txActive && txMapper) {
+    if (txCdsRange) orfOverlay = { codingStart: txCdsRange.txStart, codingEnd: txCdsRange.txEnd, strand: 'forward' }
+  } else if (orfAnchor && orfAnchor.chromosome.replace(/^chr/i, '') === chromosome.replace(/^chr/i, '')) {
+    orfOverlay = {
+      codingStart: orfAnchor.codingStart,
+      codingEnd: orfAnchor.codingEnd,
+      strand: orfAnchor.strand === '-' ? 'reverse' : 'forward',
+    }
+  }
 
   // Fetch data when viewport changes
   useEffect(() => {
@@ -238,10 +261,10 @@ export function TrackView({ track, index, totalTracks, onDragHandleDown }: Track
     ctx.clearRect(0, 0, width, track.height)
 
     if (track.type === 'sequence' && sequenceData !== null) {
-      renderSequenceCanvas(ctx, sequenceData, effectiveRegion, width, track.height, seqStrand)
+      renderSequenceCanvas(ctx, sequenceData, effectiveRegion, width, track.height, seqStrand, orfOverlay)
     } else if (track.type === 'coverage' && coverageData) {
       const covMode = txActive ? 'frame' as CoverageDisplayMode : (track.settings.displayMode as CoverageDisplayMode) ?? 'area'
-      renderCoverageCanvas(ctx, coverageData, effectiveRegion, width, track.height, track.color, covMode)
+      renderCoverageCanvas(ctx, coverageData, effectiveRegion, width, track.height, track.color, covMode, orfOverlay)
     } else if (track.type === 'alignment' && data) {
       renderAlignmentCanvas(ctx, data, coverageData ?? [], effectiveRegion, width, track.height, track.color)
     } else if (track.type === 'variant' && data) {
@@ -253,7 +276,40 @@ export function TrackView({ track, index, totalTracks, onDragHandleDown }: Track
       renderAnnotationCanvas(ctx, data, effectiveRegion, width, track.height, track.color, colors.foreground,
         (track.settings.displayMode as AnnotationDisplayMode) ?? 'expanded', strandColors)
     }
-  }, [data, coverageData, sequenceData, track.height, track.color, track.type, track.settings, effectiveRegion, colors.foreground, txActive])
+
+    // Draw start codon mark: highlight the full 3bp codon
+    const markPos = useStartCodonMarkStore.getState().position
+    if (markPos != null && useStartCodonMarkStore.getState().enabled) {
+      const codonLeft = bpToPixel(markPos, effectiveRegion, width)
+      const codonRight = bpToPixel(markPos + 3, effectiveRegion, width)
+      const codonW = Math.max(codonRight - codonLeft, 3)
+      if (codonRight >= 0 && codonLeft <= width) {
+        ctx.save()
+        // Filled codon highlight
+        ctx.fillStyle = 'rgba(217, 119, 6, 0.25)'
+        ctx.fillRect(codonLeft, 0, codonW, track.height)
+        // Border lines at codon edges
+        ctx.strokeStyle = '#d97706'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(codonLeft, 0)
+        ctx.lineTo(codonLeft, track.height)
+        ctx.moveTo(codonLeft + codonW, 0)
+        ctx.lineTo(codonLeft + codonW, track.height)
+        ctx.stroke()
+        // Small triangle at top center
+        const cx = codonLeft + codonW / 2
+        ctx.fillStyle = '#d97706'
+        ctx.beginPath()
+        ctx.moveTo(cx - 5, 0)
+        ctx.lineTo(cx + 5, 0)
+        ctx.lineTo(cx, 8)
+        ctx.closePath()
+        ctx.fill()
+        ctx.restore()
+      }
+    }
+  }, [data, coverageData, sequenceData, track.height, track.color, track.type, track.settings, effectiveRegion, colors.foreground, txActive, orfOverlay, markPosition, markEnabled])
 
   useEffect(() => {
     render()
@@ -358,6 +414,38 @@ export function TrackView({ track, index, totalTracks, onDragHandleDown }: Track
       return
     }
     isDragging.current = false
+
+    // Start codon marking: if enabled, a click sets the suggested start position
+    // snapped to the nearest in-frame codon boundary
+    const markStore = useStartCodonMarkStore.getState()
+    if (clickStartPos.current && markStore.enabled) {
+      const dx = Math.abs(e.clientX - clickStartPos.current.x)
+      const dy = Math.abs(e.clientY - clickStartPos.current.y)
+      if (dx < 4 && dy < 4) {
+        const rect = containerRef.current?.getBoundingClientRect()
+        if (rect) {
+          const clickPx = e.clientX - rect.left
+          const bp = Math.round(pixelToBp(clickPx, region, rect.width))
+          const anchor = useOrfFrameStore.getState().anchor
+          if (anchor) {
+            let snapped: number
+            if (anchor.strand === '+') {
+              const offset = ((bp - anchor.codingStart) % 3 + 3) % 3
+              snapped = bp - offset
+            } else {
+              // Minus strand: codons align to codingEnd counting backwards
+              const rem = ((anchor.codingEnd - bp) % 3 + 3) % 3
+              snapped = bp - ((3 - rem) % 3)
+            }
+            markStore.setPosition(snapped)
+          } else {
+            markStore.setPosition(bp)
+          }
+        }
+        clickStartPos.current = null
+        return
+      }
+    }
 
     // Detect click (not drag) on annotation/gene_model tracks to enter transcript view
     if (
@@ -599,7 +687,7 @@ export function TrackView({ track, index, totalTracks, onDragHandleDown }: Track
       {/* Canvas area */}
       <div
         ref={containerRef}
-        className="w-full relative cursor-grab active:cursor-grabbing select-none"
+        className={`w-full relative select-none ${markEnabled ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
